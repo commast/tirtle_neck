@@ -1,3 +1,73 @@
+# 개발 규칙 (Matt Pocock AI 코딩 원칙)
+
+> "코드는 인지 아니다. 오히려 높은 코드는 그 어느 것보다 비싸다."
+> AI 자동화의 진짜 무기는 새로운 도구가 아니라, **소프트웨어 펀더멘털(설계 능력)**이다.
+
+## 규칙 1 — Grill Me (철저한 심문)
+- 기능 구현 전, 공통된 이해(Shared Understanding)에 도달할 때까지 모든 측면에 대해 질문한다.
+- 성급하게 코드를 짜기 전에 설계 허점과 모든 분기를 명확히 한다.
+
+## 규칙 2 — Ubiquitous Language (유비쿼터스 언어)
+- 코드베이스 전체에서 사용하는 핵심 용어를 통일한다.
+- 사람과 AI가 같은 언어로 소통해야 결과물의 정확도가 높아진다.
+- 용어가 달라지면 코드가 이긋나는 원인이 된다.
+
+## 규칙 3 — TDD (테스트 주도 개발)
+- 기능 구현 전에 먼저 테스트 코드를 작성한다.
+- "그럴듯해 보이지만 실행하면 터지는 코드"를 방지한다.
+- AI가 강제로 작은 단위로 움직이게 하여 피드백 루프를 최적화한다.
+
+## 규칙 4 — Deep Modules (깊은 모듈 구조화)
+- 복잡한 인터페이스를 가진 작은 모듈(Shallow Modules)을 지양한다.
+- 단순한 인터페이스 뒤에 깊은 로직을 숨긴 'Deep Module' 형태로 아키텍처를 구성한다.
+- AI가 코드의 의존성과 구조를 더 쉽게 파악하여 수정 시 부작용을 줄인다.
+
+## 규칙 5 — Grey Box Strategy (그레이 박스 전략)
+- 중요한 인터페이스와 경계는 사람이 직접 설계한다.
+- 내부의 구체적인 비즈니스 로직(반복 작업)은 AI에게 위임한다.
+- 사람은 '전략가'로서 시스템 설계와 경계를 관리하고, AI는 '전술적 변경'을 수행한다.
+
+---
+
+# 포스처가드 (tirtle_ml)
+
+## 기술 스택
+- **Flutter** 3.x / **Dart** 3.11.x
+- **상태관리**: StatefulWidget + setState (별도 패키지 없음)
+- **백엔드**: Python FastAPI + MediaPipe Tasks API (WebSocket)
+- **주요 패키지**:
+  - `web_socket_channel` — WebSocket 통신
+  - `camera` — 폰 카메라 주기적 캡처
+  - `permission_handler` — 카메라 권한
+  - `wakelock_plus` — 백그라운드 측정 중 화면 꺼짐 방지
+
+## 구조
+```
+lib/
+├─ screens/      → 화면 (home_tab, report_tab, camera_tab, ...)
+├─ models/       → 데이터 모델 (posture_state, posture_snapshot)
+├─ painters/     → CustomPainter (arc_gauge, area_line)
+├─ constants.dart → 색상·URL·상수
+└─ main.dart     → 앱 진입점
+server/
+└─ server.py     → Python FastAPI + MediaPipe 분석 서버
+```
+
+## 규칙
+- **변경된 부분만 출력** (전체 파일 X)
+- 새 기능은 기존 파일 구조에 맞춰 배치
+- 상태는 `main_screen.dart` 에 집중 관리 (탭 전환해도 유지)
+- 카메라 캡처 로직은 `main_screen.dart` 에서 관리 (탭 독립적)
+
+## 카메라 측정 방식
+- 실시간 스트리밍 ❌ → **주기적 사진 촬영** ✅
+- 시작 즉시 첫 촬영 → 이후 **2분마다** 자동 촬영
+- 다른 탭으로 이동 / 앱 백그라운드 상태에서도 계속 작동
+- **수동 중지 버튼** 누를 때만 멈춤
+- 촬영된 사진 → 서버 분석 → 점수 → 그래프 표시
+
+---
+
 # 포스처가드 — 구조 & 기능 요약
 
 ## 프로젝트 파일 구조

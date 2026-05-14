@@ -1,8 +1,34 @@
 import 'package:flutter/material.dart';
 import '../constants.dart';
 
-class ProfileTab extends StatelessWidget {
-  const ProfileTab({super.key});
+class ProfileTab extends StatefulWidget {
+  final String               serverIp;
+  final ValueChanged<String>? onServerIpChanged; // null이면 Windows (숨김)
+
+  const ProfileTab({
+    super.key,
+    required this.serverIp,
+    this.onServerIpChanged,
+  });
+
+  @override
+  State<ProfileTab> createState() => _ProfileTabState();
+}
+
+class _ProfileTabState extends State<ProfileTab> {
+  late final TextEditingController _ipCtrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ipCtrl = TextEditingController(text: widget.serverIp);
+  }
+
+  @override
+  void dispose() {
+    _ipCtrl.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -31,6 +57,13 @@ class ProfileTab extends StatelessWidget {
             Expanded(child: _statCard('총 토큰', '5개')),
           ]),
           const SizedBox(height: 20),
+
+          // 모바일에서만 서버 IP 설정 표시
+          if (widget.onServerIpChanged != null) ...[
+            _serverIpCard(),
+            const SizedBox(height: 10),
+          ],
+
           ..._settings.map((s) => Container(
             margin: const EdgeInsets.only(bottom: 10),
             decoration: BoxDecoration(
@@ -52,6 +85,82 @@ class ProfileTab extends StatelessWidget {
           const SizedBox(height: 100),
         ]),
       ),
+    );
+  }
+
+  Widget _serverIpCard() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: kGreen.withValues(alpha: 0.4)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04), blurRadius: 6,
+          ),
+        ],
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const Icon(Icons.wifi_rounded, color: kGreen, size: 18),
+          const SizedBox(width: 6),
+          const Text('서버 IP 설정',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+          const Spacer(),
+          Text('포트: $kServerPort',
+              style: TextStyle(fontSize: 11, color: Colors.grey[500])),
+        ]),
+        const SizedBox(height: 4),
+        Text('PC와 같은 WiFi에 연결 후 PC의 IP를 입력하세요.',
+            style: TextStyle(fontSize: 11, color: Colors.grey[500])),
+        const SizedBox(height: 10),
+        Row(children: [
+          Expanded(
+            child: TextField(
+              controller: _ipCtrl,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: InputDecoration(
+                hintText: '예: 192.168.0.10',
+                hintStyle: TextStyle(color: Colors.grey[400], fontSize: 13),
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: BorderSide(color: Colors.grey[300]!),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: const BorderSide(color: kGreen),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          ElevatedButton(
+            onPressed: () {
+              widget.onServerIpChanged?.call(_ipCtrl.text.trim());
+              FocusScope.of(context).unfocus();
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('${_ipCtrl.text.trim()}:$kServerPort 에 연결 중...'),
+                  backgroundColor: kGreen,
+                  duration: const Duration(seconds: 2),
+                ),
+              );
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: kGreen,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10)),
+              elevation: 0,
+            ),
+            child: const Text('연결'),
+          ),
+        ]),
+      ]),
     );
   }
 
