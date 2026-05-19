@@ -202,7 +202,7 @@ class _CameraTabState extends State<CameraTab>
                         onPressed: !widget.connected ? null
                             : widget.captureActive
                                 ? widget.onStop
-                                : () => widget.onStart(),
+                                : () => _showCalibrationCountdown(context),
                         icon: Icon(widget.captureActive
                             ? Icons.stop_rounded
                             : Icons.play_arrow_rounded),
@@ -221,6 +221,16 @@ class _CameraTabState extends State<CameraTab>
                         ),
                       ),
                     ),
+
+                    // 측정 전 힌트
+                    if (!widget.captureActive) ...[
+                      const SizedBox(height: 10),
+                      Text(
+                        '💡 시작 후 홈 버튼으로 나가면 백그라운드에서 자동 감지합니다.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+                      ),
+                    ],
                   ]),
                 ),
                 const SizedBox(height: 20),
@@ -340,21 +350,39 @@ class _CameraTabState extends State<CameraTab>
                   Container(
                     padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
-                      color: kGreen.withValues(alpha: 0.07),
+                      color: Colors.blue.shade50,
                       borderRadius: BorderRadius.circular(14),
-                      border: Border.all(
-                          color: kGreen.withValues(alpha: 0.3)),
+                      border: Border.all(color: Colors.blue.withValues(alpha: 0.3)),
                     ),
-                    child: const Row(children: [
-                      Icon(Icons.info_outline_rounded,
-                          color: kGreen, size: 18),
-                      SizedBox(width: 10),
-                      Expanded(child: Text(
-                        '다른 탭으로 이동하거나 앱을 백그라운드로 보내도\n'
-                        '측정은 계속 진행됩니다.',
-                        style: TextStyle(fontSize: 12, color: kGreen),
-                      )),
-                    ]),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(children: [
+                          Icon(Icons.smartphone_rounded,
+                              color: Colors.blue.shade700, size: 16),
+                          const SizedBox(width: 6),
+                          Text('백그라운드 사용 방법',
+                              style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.blue.shade700)),
+                        ]),
+                        const SizedBox(height: 10),
+                        _bgGuideRow(
+                          icon: Icons.check_circle_rounded,
+                          color: Colors.green,
+                          label: '홈 버튼으로 나가기',
+                          desc: '카메라 유지, 자동 감지 계속',
+                        ),
+                        const SizedBox(height: 6),
+                        _bgGuideRow(
+                          icon: Icons.cancel_rounded,
+                          color: Colors.red,
+                          label: '최근 앱에서 닫기',
+                          desc: '카메라 종료, 감지 중단',
+                        ),
+                      ],
+                    ),
                   ),
                 ],
                 const SizedBox(height: 100),
@@ -364,6 +392,35 @@ class _CameraTabState extends State<CameraTab>
         ],
       ),
     );
+  }
+
+  /// 측정 시작 전 바른 자세 안내 카운트다운 다이얼로그
+  void _showCalibrationCountdown(BuildContext context) {
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _CalibrationDialog(onComplete: widget.onStart),
+    );
+  }
+
+  Widget _bgGuideRow({
+    required IconData icon,
+    required Color color,
+    required String label,
+    required String desc,
+  }) {
+    return Row(children: [
+      Icon(icon, color: color, size: 16),
+      const SizedBox(width: 8),
+      Text(label,
+          style: TextStyle(
+              fontSize: 12, fontWeight: FontWeight.w600, color: color)),
+      const SizedBox(width: 4),
+      Expanded(
+        child: Text('→ $desc',
+            style: TextStyle(fontSize: 11, color: Colors.grey[600])),
+      ),
+    ]);
   }
 
   Widget _connChip() {
@@ -482,3 +539,86 @@ class _GraphPainter extends CustomPainter {
   bool shouldRepaint(_GraphPainter old) =>
       old.history.length != history.length;
 }
+
+// ── 캘리브레이션 카운트다운 다이얼로그 ──────────────────────────────
+class _CalibrationDialog extends StatefulWidget {
+  final Future<void> Function() onComplete;
+  const _CalibrationDialog({required this.onComplete});
+
+  @override
+  State<_CalibrationDialog> createState() => _CalibrationDialogState();
+}
+
+class _CalibrationDialogState extends State<_CalibrationDialog> {
+  int    _count = 5;
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      setState(() => _count--);
+      if (_count <= 0) {
+        _timer?.cancel();
+        Navigator.of(context).pop();
+        widget.onComplete();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      contentPadding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
+      content: Column(mainAxisSize: MainAxisSize.min, children: [
+        const Icon(Icons.accessibility_new_rounded,
+            size: 48, color: kGreen),
+        const SizedBox(height: 12),
+        const Text('바른 자세로 앉아주세요',
+            style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+            textAlign: TextAlign.center),
+        const SizedBox(height: 8),
+        Text('이 자세가 기준(100점)이 됩니다.',
+            style: TextStyle(fontSize: 13, color: Colors.grey[600]),
+            textAlign: TextAlign.center),
+        const SizedBox(height: 24),
+        // 카운트다운 원
+        Container(
+          width: 72, height: 72,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: kGreen.withValues(alpha: 0.1),
+            border: Border.all(color: kGreen, width: 2.5),
+          ),
+          child: Center(
+            child: Text('$_count',
+                style: const TextStyle(
+                    fontSize: 32, fontWeight: FontWeight.bold,
+                    color: kGreen)),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text('$_count초 후 자동 시작',
+            style: TextStyle(fontSize: 12, color: Colors.grey[500])),
+      ]),
+      actions: [
+        TextButton(
+          onPressed: () {
+            _timer?.cancel();
+            Navigator.of(context).pop();
+          },
+          child: Text('취소', style: TextStyle(color: Colors.grey[600])),
+        ),
+      ],
+    );
+  }
+}
+

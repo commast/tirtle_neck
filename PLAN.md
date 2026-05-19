@@ -1,207 +1,315 @@
-# 개발 규칙 (Matt Pocock AI 코딩 원칙)
-
-> "코드는 인지 아니다. 오히려 높은 코드는 그 어느 것보다 비싸다."
-> AI 자동화의 진짜 무기는 새로운 도구가 아니라, **소프트웨어 펀더멘털(설계 능력)**이다.
-
-## 규칙 1 — Grill Me (철저한 심문)
-- 기능 구현 전, 공통된 이해(Shared Understanding)에 도달할 때까지 모든 측면에 대해 질문한다.
-- 성급하게 코드를 짜기 전에 설계 허점과 모든 분기를 명확히 한다.
-
-## 규칙 2 — Ubiquitous Language (유비쿼터스 언어)
-- 코드베이스 전체에서 사용하는 핵심 용어를 통일한다.
-- 사람과 AI가 같은 언어로 소통해야 결과물의 정확도가 높아진다.
-- 용어가 달라지면 코드가 이긋나는 원인이 된다.
-
-## 규칙 3 — TDD (테스트 주도 개발)
-- 기능 구현 전에 먼저 테스트 코드를 작성한다.
-- "그럴듯해 보이지만 실행하면 터지는 코드"를 방지한다.
-- AI가 강제로 작은 단위로 움직이게 하여 피드백 루프를 최적화한다.
-
-## 규칙 4 — Deep Modules (깊은 모듈 구조화)
-- 복잡한 인터페이스를 가진 작은 모듈(Shallow Modules)을 지양한다.
-- 단순한 인터페이스 뒤에 깊은 로직을 숨긴 'Deep Module' 형태로 아키텍처를 구성한다.
-- AI가 코드의 의존성과 구조를 더 쉽게 파악하여 수정 시 부작용을 줄인다.
-
-## 규칙 5 — Grey Box Strategy (그레이 박스 전략)
-- 중요한 인터페이스와 경계는 사람이 직접 설계한다.
-- 내부의 구체적인 비즈니스 로직(반복 작업)은 AI에게 위임한다.
-- 사람은 '전략가'로서 시스템 설계와 경계를 관리하고, AI는 '전술적 변경'을 수행한다.
+# 포스처가드 (Tirtle ML) — 프로젝트 문서
 
 ---
 
-# 포스처가드 (tirtle_ml)
+## 1. 앱 개요
 
-## 기술 스택
-- **Flutter** 3.x / **Dart** 3.11.x
-- **상태관리**: StatefulWidget + setState (별도 패키지 없음)
-- **백엔드**: Python FastAPI + MediaPipe Tasks API (WebSocket)
-- **주요 패키지**:
-  - `web_socket_channel` — WebSocket 통신
-  - `camera` — 폰 카메라 주기적 캡처
-  - `permission_handler` — 카메라 권한
-  - `wakelock_plus` — 백그라운드 측정 중 화면 꺼짐 방지
+거북목·자세 불량을 감지해 사용자에게 알리는 모바일/데스크톱 앱.
 
-## 구조
-```
-lib/
-├─ screens/      → 화면 (home_tab, report_tab, camera_tab, ...)
-├─ models/       → 데이터 모델 (posture_state, posture_snapshot)
-├─ painters/     → CustomPainter (arc_gauge, area_line)
-├─ constants.dart → 색상·URL·상수
-└─ main.dart     → 앱 진입점
-server/
-└─ server.py     → Python FastAPI + MediaPipe 분석 서버
-```
-
-## 규칙
-- **변경된 부분만 출력** (전체 파일 X)
-- 새 기능은 기존 파일 구조에 맞춰 배치
-- 상태는 `main_screen.dart` 에 집중 관리 (탭 전환해도 유지)
-- 카메라 캡처 로직은 `main_screen.dart` 에서 관리 (탭 독립적)
-
-## 카메라 측정 방식
-- 실시간 스트리밍 ❌ → **주기적 사진 촬영** ✅
-- 시작 즉시 첫 촬영 → 이후 **2분마다** 자동 촬영
-- 다른 탭으로 이동 / 앱 백그라운드 상태에서도 계속 작동
-- **수동 중지 버튼** 누를 때만 멈춤
-- 촬영된 사진 → 서버 분석 → 점수 → 그래프 표시
+| 항목 | 내용 |
+|---|---|
+| 프론트엔드 | Flutter 3.x / Dart 3.11.x |
+| 백엔드 | Python FastAPI + MediaPipe (카메라 분석) |
+| 네이티브 | Android Kotlin (시스템 오버레이, 포그라운드 서비스) |
+| 상태관리 | StatefulWidget + setState (외부 라이브러리 없음) |
 
 ---
 
-# 포스처가드 — 구조 & 기능 요약
-
-## 프로젝트 파일 구조
+## 2. 파일 구조
 
 ```
 tirtle_ml/
-├─ server/
-│   ├─ server.py              ← Python FastAPI 서버 (WebSocket + MediaPipe)
-│   └─ requirements.txt
-│
-├─ lib/
-│   ├─ main.dart              ← 앱 진입점 + TirtleApp (MaterialApp 설정만)
-│   ├─ constants.dart         ← 상수 (kServerUrl, kGreen, kBg, kGraphMax)
-│   │
-│   ├─ models/
-│   │   └─ posture_state.dart ← PostureState 데이터 모델 + fromJson
-│   │
-│   ├─ painters/
-│   │   ├─ arc_gauge_painter.dart   ← 원형 호 게이지 CustomPainter
-│   │   └─ area_line_painter.dart   ← 면적 채움 선 그래프 CustomPainter
-│   │
-│   └─ screens/
-│       ├─ main_screen.dart   ← WebSocket 연결 + 바텀 네비게이션 + 탭 라우팅
-│       ├─ home_tab.dart      ← 홈 (점수 카드, 그래프, 이슈, 가이드)
-│       ├─ report_tab.dart    ← 리포트 (원형 게이지, 추이, 생체 데이터)
-│       ├─ camera_tab.dart    ← 카메라 실시간 피드 + 서브 지표
-│       ├─ reward_tab.dart    ← 보상 센터 (토큰, 랜덤 보상)
-│       └─ profile_tab.dart   ← 프로필 + 설정
-│
-├─ PLAN.md                    ← 이 파일
-└─ PLAN2.md                   ← Python 서버 내부 상세 문서
+├── server/server.py                      # Python 분석 서버
+├── assets/posture_model.tflite           # 센서 자세 분류 TFLite 모델
+├── lib/
+│   ├── main.dart                         # 앱 진입점
+│   ├── constants.dart                    # 색상, URL, 포트 상수
+│   ├── models/
+│   │   ├── posture_state.dart            # WebSocket JSON → 객체 변환
+│   │   ├── posture_snapshot.dart         # 2분 캡처 스냅샷 모델
+│   │   └── sensor_posture.dart           # 센서 자세 Enum (6가지 + 색상/아이콘)
+│   ├── services/
+│   │   ├── sensor_classifier.dart        # 가속도/자이로 기반 TFLite 분류
+│   │   └── overlay_channel.dart          # Flutter → Kotlin MethodChannel 래퍼
+│   ├── painters/
+│   │   ├── arc_gauge_painter.dart        # 원형 게이지 (270도 호)
+│   │   └── area_line_painter.dart        # 면적 채움 선 그래프
+│   └── screens/
+│       ├── main_screen.dart              # 핵심 — WebSocket/카메라/서비스 중추
+│       ├── home_tab.dart                 # 점수 카드, 그래프, 이슈 카드
+│       ├── report_tab.dart               # 원형 게이지, 시간대별 그래프, 각도 분석
+│       ├── camera_tab.dart               # 촬영 상태, 카운트다운, 이력
+│       ├── reward_tab.dart               # 토큰/보상 센터 (UI 스켈레톤)
+│       └── profile_tab.dart              # 서버 IP 설정, 오버레이 시작 버튼
+└── android/app/src/main/
+    ├── kotlin/com/example/tirtle_ml/
+    │   ├── MainActivity.kt               # MethodChannel 등록
+    │   └── OverlayService.kt             # 네이티브 시스템 오버레이
+    └── AndroidManifest.xml
 ```
 
-## 각 파일 역할
+---
 
-| 파일 | 역할 | 의존 |
-|------|------|------|
-| `main.dart` | 앱 시작, 테마 설정 | constants, main_screen |
-| `constants.dart` | 색상·URL·상수 공유 | 없음 |
-| `models/posture_state.dart` | WebSocket JSON → 객체 변환 | 없음 |
-| `painters/arc_gauge_painter.dart` | 270° 원형 점수 게이지 | flutter/material |
-| `painters/area_line_painter.dart` | 면적 채움 실시간 그래프 | flutter/material |
-| `screens/main_screen.dart` | WebSocket 연결·재연결, 바텀 네비 | 모든 탭 |
-| `screens/home_tab.dart` | 메인 대시보드 | constants, model, painters |
-| `screens/report_tab.dart` | 분석 리포트 | constants, model, painters |
-| `screens/camera_tab.dart` | 카메라 피드, 경고 배너 | constants, model |
-| `screens/reward_tab.dart` | 토큰 시스템 | constants |
-| `screens/profile_tab.dart` | 프로필, 설정 목록 | constants |
-
-## 전체 데이터 흐름
+## 3. 전체 데이터 흐름
 
 ```
-[PC 웹캠]
-    ↓ OpenCV (CAP_DSHOW)
-[detection_loop 스레드]
-    ├─ MediaPipe Tasks API
-    │   ├─ PoseLandmarker  → 어깨/귀 랜드마크, z축
-    │   └─ FaceLandmarker  → solvePnP 피치각, 눈-어깨 비율
-    ├─ 점수 계산 (pitch 40% + eye 30% + vis 15% + z 15%)
-    ├─ 캘리브레이션 보정 (5초 기준값 대비 편차)
-    └─ JPEG 인코딩 → base64
-         ↓ 공유 state + frame (threading.Lock)
-[FastAPI WebSocket /ws]
-    ↓ JSON (20fps)
-[MainScreen — WebSocket 수신]
-    ├─ PostureState.fromJson()
-    ├─ _scoreHistory / _subHistory 업데이트
-    └─ setState() → 하위 탭 리빌드
+[폰 카메라]  2분마다 자동 촬영 (즉시 1회 + Timer.periodic)
+     ↓ JPEG → base64
+[main_screen.dart _captureOnce()]
+     ↓ WebSocket send  {"type":"frame", "frame":"..."}
+[server.py MobileSession.process()]
+     ├─ MediaPipe PoseLandmarker  → 어깨/귀 관절 위치
+     ├─ MediaPipe FaceLandmarker  → 얼굴 3D 각도 (solvePnP)
+     └─ 점수 계산 → JSON 응답
+     ↓
+[main_screen.dart WebSocket listen()]
+     ├─ PostureState 파싱
+     ├─ 점수 히스토리 누적
+     └─ PostureSnapshot 저장 (리포트용)
+     ↓
+[하위 탭 렌더링]  HomeTab / ReportTab / CameraTab
+
+[가속도계 + 자이로]  50Hz 상시 수집 (SensorClassifier)
+     ↓ 40프레임 윈도우
+[TFLite 추론]  5개 자세 분류
+     ↓ turtleNeck 감지 + 60초 쿨다운
+[자동 카메라 촬영]  startCapture() 또는 _captureOnce()
+     ↓
+[OverlayService]  상태 변경 시 WindowManager View 업데이트
 ```
 
-## WebSocket JSON 구조
+---
 
-```json
-{
-  "status":    "calibrating | ok | warning | no_person | error_no_camera",
-  "score":     85,
-  "countdown": 3,
-  "is_fhp":    false,
-  "scores": { "pitch": 0.9, "eye": 0.8, "vis": 1.0, "z": 0.7 },
-  "frame":     "<base64 JPEG>"
+## 4. Flutter ↔ Kotlin 브릿지 패턴
+
+Flutter에서 Android 네이티브 기능을 호출하는 공식 방법.
+**채널 이름이 양쪽에서 동일하면 자동 연결**된다.
+
+### 구조
+
+```
+Dart (lib/services/overlay_channel.dart)
+    MethodChannel('com.example.tirtle_ml/overlay').invokeMethod('update', {...})
+              ↕  [채널 이름 일치]
+Kotlin (android/.../MainActivity.kt)
+    MethodChannel(..., 'com.example.tirtle_ml/overlay').setMethodCallHandler { call, result →
+        when (call.method) { "update" → OverlayService.updateState(...) }
+    }
+```
+
+### 빌드 과정
+
+```
+flutter run
+  ├─ Dart 컴파일  (Flutter SDK)
+  └─ Android 빌드  (Gradle Wrapper가 처리)
+       ├─ android/gradlew → Gradle 자동 다운로드 (최초 1회)
+       ├─ Kotlin 플러그인 → JetBrains 서버에서 자동 다운로드
+       └─ .kt 파일 컴파일 → APK에 포함
+```
+
+**PC에 Kotlin/Gradle 별도 설치 불필요.**
+`flutter run` 한 번으로 Dart + Kotlin이 자동으로 합쳐진 APK가 생성된다.
+
+### 이 방식으로 연결 가능한 것들
+
+- Android 전용 라이브러리 (`build.gradle.kts`에 `implementation(...)` 추가)
+- WindowManager (시스템 오버레이)
+- AccessibilityService (다른 앱 화면 읽기)
+- 하드웨어 직접 제어 (NFC, BLE 세밀 제어 등)
+- pub.dev 패키지가 없거나 부족한 모든 Android 기능
+
+---
+
+## 5. 네이티브 오버레이 작동 방식
+
+다른 앱·홈화면 위에 자세 상태를 표시하는 핵심 기능.
+
+### 왜 Kotlin으로 직접 구현했나
+
+`flutter_overlay_window 0.5.0` 라이브러리의 Java 코드가:
+```java
+startForeground(NOTIFICATION_ID, notification);  // 타입 파라미터 없음
+```
+Android 14는 `foregroundServiceType` 명시를 강제 → `validateForegroundServiceType` 예외 → 서비스 시작 불가.
+
+Kotlin에서 직접:
+```kotlin
+startForeground(5001, notification,
+    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)  // Android 14 필수
+```
+
+### OverlayService.kt 핵심 코드
+
+```kotlin
+// 앱과 무관한 시스템 레이어에 View 부착
+val type = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+val params = WindowManager.LayoutParams(
+    WRAP_CONTENT, WRAP_CONTENT, type,
+    FLAG_NOT_FOCUSABLE,     // 터치가 아래 앱으로 통과
+    PixelFormat.TRANSLUCENT
+)
+params.gravity = Gravity.TOP or Gravity.END  // 우측 상단
+windowManager.addView(overlayView, params)
+
+// 상태 업데이트 (메인 스레드 보장)
+fun applyState(label: String, colorHex: String) {
+    Handler(Looper.getMainLooper()).post {
+        tvLabel.text = label
+        (overlayView.background as GradientDrawable).setColor(Color.parseColor(colorHex))
+    }
 }
 ```
 
-## 점수 체계
+### 필요한 권한 (AndroidManifest.xml)
 
-| 지표 | 방법 | 가중치 |
-|------|------|--------|
-| pitch | solvePnP 머리 피치각 vs 기준 | 40% |
-| eye | 눈-어깨 수직 비율 vs 기준 | 30% |
-| vis | 귀 가시성 | 15% |
-| z | 어깨-귀 z축 차이 | 15% |
+```xml
+<uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
+<uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
 
-- `score` 0–100, 높을수록 좋은 자세
-- `is_fhp = score < 80`
-
-## 주요 기능
-
-| 기능 | 설명 | 구현 위치 |
-|------|------|-----------|
-| 서버 자동 시작 | 앱 실행 시 `"포스처가드 서버"` 창이 자동으로 열리며 uvicorn 서버 시작 | `main_screen.dart` `_startServer()` |
-| **서버 자동 종료** | **Flutter 창 X버튼으로 닫으면 Python 서버 창도 함께 종료** (`taskkill /F /FI WINDOWTITLE`) | `main_screen.dart` `_killServer()` |
-| WebSocket 자동 재연결 | 서버 연결 끊기면 3초 후 자동 재연결 | `main_screen.dart` `_onDisconnect()` |
-| 자세 스냅샷 측정 | 앱 시작 직후 즉시 1회 + 이후 **2분마다** 자동 측정, `PostureSnapshot` 객체로 저장 | `main_screen.dart` `_takeSnapshot()` |
-| 오늘의 자세 점수 | 스냅샷 점수의 평균값 (홈 화면 표시) | `main_screen.dart` `_todayScore` |
-| 리포트 — 자세 건강 점수 | 원형 게이지 + 상위 몇% 동기부여 문구 | `report_tab.dart` `_scoreGaugeCard()` |
-| 리포트 — 시간대별 변화 | 스냅샷 기반 타임라인 그래프 (시각 라벨, 면적 채움, 최저 시각 분석) | `report_tab.dart` `_timelineCard()` |
-| 리포트 — 각도 분석 | 현재/평균 목 각도(°) + 사람 실루엣 그림으로 FHP 시각화 | `report_tab.dart` `_biometricCard()` |
-| 리포트 — 이전 대비 개선도 | 이전·현재 점수 바 차트 + 점수 차이 표시 | `report_tab.dart` `_comparisonCard()` |
-| 실시간 카메라 피드 | 서버에서 base64 JPEG를 20fps로 수신해 표시 | `camera_tab.dart` |
-| 5초 캘리브레이션 | 앱 첫 실행 시 바른 자세 기준값 수집 | `server/server.py` |
-
-## 실행 방법
-
-```bash
-# Flutter 앱만 실행하면 Python 서버가 자동으로 함께 시작됩니다
-flutter run
-
-# 최초 1회만: Python 패키지 설치
-cd tirtle_ml/server
-pip install fastapi "uvicorn[standard]" mediapipe opencv-python numpy
+<service android:name=".OverlayService"
+         android:foregroundServiceType="specialUse">
+    <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+              android:value="센서 자세 상태를 다른 앱 위에 표시"/>
+</service>
 ```
 
-## 서버 주소 변경
+---
 
-[lib/constants.dart](lib/constants.dart) 의 `kServerUrl` 수정:
-- Windows 앱: `ws://localhost:8000/ws`
-- 안드로이드 에뮬레이터: `ws://10.0.2.2:8000/ws`
-- 실기기 (같은 와이파이): `ws://<PC IP>:8000/ws`
+## 6. Python 서버 (server.py)
 
-## 주요 오류 해결
+### 점수 계산 알고리즘
 
-| 오류 | 해결 |
-|------|------|
-| `No supported WebSocket library` | `pip install "uvicorn[standard]"` |
-| 카메라 안 열림 | 자동으로 0→1→2 순서 시도, CAP_DSHOW 사용 |
-| 항상 no_person | 조명 개선, 카메라를 눈높이에 |
-| Flutter 재연결 중 | 서버가 실행 중인지 확인 |
+```python
+# 4가지 지표를 가중 평균
+score = (s_pitch*0.40 + s_eye*0.30 + s_vis*0.15 + s_z*0.15) * 100
+
+# 각 지표 계산
+s_pitch = 1 - (현재_pitch - golden_pitch) / 12°           # 목 기울기
+s_eye   = (현재_eye_ratio / golden_eye_ratio - 0.7) / 0.3  # 눈-어깨 비율
+s_vis   = 1 - (golden_ear_vis - 현재_ear_vis) / 0.15       # 귀 가시성
+s_z     = 1 - (현재_z - golden_z) / 0.25                   # 전후 깊이 차이
+```
+
+### 캘리브레이션
+
+- 첫 프레임 수신 시 현재 자세를 `golden` 기준값으로 저장
+- 이후 모든 점수는 golden과의 **편차** 기반
+- 캘리브레이션 실패(golden=0) 방어: 현재 프레임 값으로 즉시 보정
+
+### WebSocket 응답 형식
+
+```json
+{
+  "status": "calibrating|ok|warning|no_person",
+  "score": 85,
+  "is_fhp": false,
+  "countdown": 0,
+  "scores": {"pitch": 0.9, "eye": 0.8, "vis": 1.0, "z": 0.7}
+}
+```
+
+---
+
+## 7. 센서 기반 자세 분류 (SensorClassifier)
+
+### TFLite 모델
+
+- 입력: 40프레임 × 8특징 `[accX, accY, accZ, gyrX, gyrY, gyrZ, pitch, roll]`
+- 출력: 5개 클래스 확률 `[normal, turtleNeck, desk, sideLying, lying]`
+- 샘플링: `SensorInterval.gameInterval` (~50Hz)
+
+### 2단계 추론 전략
+
+```
+1차: TFLite 모델 (정상 경로)
+     40프레임 채워지면 → 추론 → 5개 확률 중 argmax
+
+2차: 임계치 fallback (모델 로드 실패 시 자동 전환)
+     평균 pitch > 30° OR 평균 Z가속 < 5.0 → turtleNeck
+     그 외 → normal
+```
+
+### 거북목 감지 → 자동 촬영
+
+```
+turtleNeck 감지 + 60초 쿨다운 통과
+    ├─ 측정 중 아님 → startCapture() (포그라운드 서비스 포함 전체 플로우)
+    └─ 측정 중     → _captureOnce()  (즉시 추가 촬영)
+```
+
+---
+
+## 8. 주요 버그 수정 이력
+
+### WebSocket 경쟁 조건 (Race Condition)
+
+- **문제**: `_connect()`에서 `_channel.sink.close()` → `onDone` → `_onDisconnect()` → 재연결 무한루프
+- **해결**: `_channel = null` 먼저, `old?.sink.close()` 나중 (순서 중요)
+
+### 점수 85점 고정 버그
+
+- **원인**: 캘리브레이션 5초 수집 구간을 건너뛰어 `golden` 값이 전부 0
+  - s_pitch, s_eye → 조건 실패로 1.0 강제
+  - s_z → `(curr_z - 0) / 0.25` → 항상 0
+  - 결과: `(0.40 + 0.30 + 0.15 + 0) × 100 = 85`
+- **해결**: 캘리브레이션 데이터 수집을 `elapsed` 체크보다 먼저 실행 + z 임계값 0.1→0.25 완화 + golden=0 런타임 보정
+
+### Android 14 포그라운드 서비스 크래시
+
+- **문제**: `foregroundServiceType` 파라미터 없이 `startForeground()` 호출
+- **해결**: `ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE` 명시 (API 29+)
+
+### 재연결 루프 불안정
+
+- **해결**: `_isConnecting` 플래그로 중복 연결 방지 + 지수적 백오프 (2→4→8→최대 30초)
+
+---
+
+## 9. 플랫폼별 동작 차이
+
+| 기능 | Windows | Android |
+|---|---|---|
+| WebSocket 서버 | 자동 시작/종료 | 수동 실행 필요 |
+| 카메라 | PC 웹캠 | 전면 카메라 |
+| 센서 | 없음 | 가속도/자이로 |
+| TFLite 분류 | 없음 | 5가지 자세 |
+| 시스템 오버레이 | 없음 | 우측 상단 플로팅 칩 |
+| 포그라운드 서비스 | 없음 | 센서 + 촬영 백그라운드 유지 |
+| 서버 IP | 고정 (localhost) | 프로필 탭에서 입력 |
+
+---
+
+## 10. 주요 의존성
+
+```yaml
+web_socket_channel: ^3.0.1       # WebSocket 통신
+camera: ^0.11.0+2                # 카메라 촬영
+permission_handler: ^11.3.1      # 런타임 권한 요청
+wakelock_plus: ^1.3.4            # 백그라운드 화면 유지
+flutter_foreground_task: ^8.0.2  # 포그라운드 서비스
+sensors_plus: ^6.1.0             # 가속도/자이로 센서
+tflite_flutter: ^0.11.0          # TFLite 추론 (FFI 기반)
+flutter_overlay_window: ^0.5.0   # 현재 미사용 (네이티브 방식으로 대체)
+```
+
+### build.gradle.kts 필수 설정
+
+```kotlin
+aaptOptions {
+    noCompress("tflite")  // .tflite 파일 압축 안 함 (메모리 매핑 필수)
+}
+```
+
+---
+
+## 11. 센서 자세 상태 색상표
+
+| 상태 | 라벨 | 색상 |
+|---|---|---|
+| inactive | 사용안함 | `#9E9E9E` 회색 |
+| normal | 정상 | `#00C896` 초록 |
+| turtleNeck | 거북목 | `#FF9800` 주황 |
+| desk | 책상 자세 | `#2196F3` 파랑 |
+| sideLying | 옆으로 누움 | `#00838F` 청록 |
+| lying | 누움 | `#9C27B0` 보라 |

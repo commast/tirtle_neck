@@ -37,6 +37,17 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
     }
+
+    // tflite_flutter: .tflite 파일을 압축하지 않아야 메모리 매핑 가능
+    // MediaPipe: .task 파일도 동일하게 비압축 필요
+    aaptOptions {
+        noCompress("tflite")
+        noCompress("task")
+    }
+}
+
+dependencies {
+    implementation("com.google.mediapipe:tasks-vision:0.10.14")
 }
 
 flutter {

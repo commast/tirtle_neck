@@ -6,8 +6,18 @@
 
     <!-- Foreground Service 권한 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
-    <!-- Android 14+ 카메라 포그라운드 서비스 -->
+    <!-- Android 14+ 데이터/센서 포그라운드 서비스 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
+    <!-- Android 11+ 백그라운드 카메라 접근 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA"/>
+    <!-- Android 14+ 오버레이 서비스용 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
+    <!-- Android 13+ 알림 권한 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- 다른 앱 위에 표시 (플로팅 센서 상태 오버레이) -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
+    <!-- 오버레이 화면 유지용 -->
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <!-- 부팅 후 자동 시작 (선택) -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
 
@@ -38,11 +48,30 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
-        <!-- flutter_foreground_task 서비스 (foregroundServiceType=camera 필수) -->
+        <!-- flutter_foreground_task 서비스 (dataSync: 센서 백그라운드 유지) -->
         <service
             android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
-            android:foregroundServiceType="camera"
+            android:foregroundServiceType="dataSync"
             android:exported="false"/>
+
+        <!-- 백그라운드 카메라 서비스 (Android 11+에서 백그라운드 촬영 허용) -->
+        <service
+            android:name=".CameraBackgroundService"
+            android:foregroundServiceType="camera"
+            android:stopWithTask="true"
+            android:exported="false"/>
+
+        <!-- 네이티브 오버레이 서비스 (다른 앱 위에 자세 상태 표시) -->
+        <!-- stopWithTask: 앱을 완전히 닫으면 오버레이도 자동 종료 -->
+        <service
+            android:name=".OverlayService"
+            android:foregroundServiceType="specialUse"
+            android:stopWithTask="true"
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="센서 자세 상태를 다른 앱 위에 표시"/>
+        </service>
 
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->

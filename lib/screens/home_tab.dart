@@ -1,15 +1,17 @@
 import 'package:flutter/material.dart';
 import '../constants.dart';
 import '../models/posture_state.dart';
+import '../models/title_system.dart';
 import '../painters/arc_gauge_painter.dart';
 import '../painters/area_line_painter.dart';
 
 class HomeTab extends StatefulWidget {
-  final PostureState data;
-  final bool         connected;
-  final List<double> scoreHistory;
-  final int          todayScore;
-  final int          snapshotCount;
+  final PostureState  data;
+  final bool          connected;
+  final List<double>  scoreHistory;
+  final int           todayScore;
+  final int           snapshotCount;
+  final PostureTitle? currentTitle; // null = 측정 전
 
   const HomeTab({
     super.key,
@@ -18,6 +20,7 @@ class HomeTab extends StatefulWidget {
     required this.scoreHistory,
     required this.todayScore,
     required this.snapshotCount,
+    this.currentTitle,
   });
 
   @override
@@ -63,7 +66,31 @@ class _HomeTabState extends State<HomeTab> {
   }
 
   Widget _buildAppBarRow() {
-    return Row(
+    final title = widget.currentTitle;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // ── 칭호 배지 (측정 기록 있을 때만 표시) ─────────────────
+        if (title != null) ...[
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: title.color.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: title.color.withValues(alpha: 0.3)),
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Text(title.emoji, style: const TextStyle(fontSize: 14)),
+              const SizedBox(width: 6),
+              Text(title.name,
+                  style: TextStyle(
+                      fontSize: 12, color: title.color,
+                      fontWeight: FontWeight.w700)),
+            ]),
+          ),
+          const SizedBox(height: 8),
+        ],
+        Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
         Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -103,7 +130,9 @@ class _HomeTabState extends State<HomeTab> {
           ]),
         ]),
       ],
-    );
+    ),   // Row 닫기
+    ],   // Column children 닫기
+  );   // Column 닫기
   }
 
   Widget _buildScoreSummaryCard(int score) {

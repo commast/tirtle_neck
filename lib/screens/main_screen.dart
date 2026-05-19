@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
@@ -10,6 +11,12 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import '../constants.dart';
 import '../models/posture_state.dart';
 import '../models/posture_snapshot.dart';
+import '../models/sensor_posture.dart';
+import '../models/title_system.dart';
+import '../services/sensor_classifier.dart';
+import '../services/overlay_channel.dart';
+import '../services/pose_analyzer_channel.dart';
+import '../services/native_camera_channel.dart';
 import 'home_tab.dart';
 import 'report_tab.dart';
 import 'camera_tab.dart';
@@ -49,6 +56,18 @@ class _MainScreenState extends State<MainScreen>
   // 모바일 서버 IP
   String _serverIp = '';
 
+  // 앱 백그라운드 여부 (센서 트리거 시 카메라 서비스 시작 판단용)
+  bool _appInBackground = false;
+
+  // ── 센서 자세 분류기 (Android 전용) ────────────────────────────
+  SensorClassifier? _sensorClassifier;
+  SensorPosture     _sensorPosture = SensorPosture.inactive;
+
+  // ── 온디바이스 분석 모드 ─────────────────────────────────────────
+  // true  → 서버 없이 폰 안에서 MediaPipe 직접 실행
+  // false → 기존 Python WebSocket 서버 방식
+  static const bool _useLocalAnalysis = true;
+
   // 연결 상태 관리
   bool   _isConnecting = false;
   Timer? _reconnectTimer;
@@ -78,12 +97,38 @@ class _MainScreenState extends State<MainScreen>
       duration: const Duration(milliseconds: 600),
     )..repeat(reverse: true);
     WidgetsBinding.instance.addObserver(this);
+    _loadHistory(); // 앱 시작 시 이전 기록 복원
     _initForegroundTask(); // 포그라운드 서비스 옵션 설정
 
     if (Platform.isWindows) {
       _startServer();
-    } else {
+    } else if (!_useLocalAnalysis) {
+      // 서버 방식: WebSocket 연결
       Future.delayed(const Duration(seconds: 1), _connect);
+    }
+    // 온디바이스 방식: WebSocket 연결 불필요, 모델만 초기화
+
+    // 센서 분류기 + 포그라운드 서비스 시작 (Android 전용, 백그라운드 센서 유지)
+    if (Platform.isAndroid) {
+      _sensorClassifier = SensorClassifier(
+        onPostureChanged: (p) {
+          if (mounted) setState(() => _sensorPosture = p);
+          OverlayChannel.update(p); // 네이티브 오버레이 상태 전송
+        },
+        onTurtleNeckDetected: _onTurtleNeckDetected,
+      );
+      Future.microtask(() async {
+        await _sensorClassifier!.start();
+        if (mounted) setState(() => _sensorPosture = SensorPosture.normal);
+        await _startSensorForegroundService();
+        await _setupOverlay();
+        // 온디바이스 모드: MediaPipe 모델 초기화 (백그라운드)
+        if (_useLocalAnalysis) {
+          final ok = await PoseAnalyzerChannel.initialize();
+          debugPrint('[LocalAnalysis] 모델 초기화 ${ok ? "성공" : "실패"}');
+          if (mounted) setState(() => _connected = ok); // 연결 표시 재활용
+        }
+      });
     }
   }
 
@@ -92,16 +137,43 @@ class _MainScreenState extends State<MainScreen>
     if (state == AppLifecycleState.detached && Platform.isWindows) {
       _killServer();
     }
-    // 측정 중 백그라운드 진입 시 카메라/타이머를 절대 중단하지 않음
-    // (포그라운드 서비스가 프로세스를 유지하므로 Timer.periodic 계속 작동)
-    // 단, 카메라 컨트롤러가 비활성화될 경우 재초기화
-    if (state == AppLifecycleState.resumed && _captureActive) {
-      _ensureCameraReady();
+
+    // 백그라운드 상태 추적
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive) {
+      _appInBackground = true;
+      // A안: 백그라운드 진입 시 preview만 멈추고 카메라 세션은 유지 시도
+      // (CameraX가 STOPPED에서 해제하기 전에 pausePreview로 세션을 붙잡음)
+      if (_captureActive && _camCtrl != null &&
+          _camCtrl!.value.isInitialized) {
+        try { _camCtrl!.pausePreview(); } catch (_) {}
+      }
+    } else if (state == AppLifecycleState.resumed) {
+      _appInBackground = false;
+    }
+
+    if (state == AppLifecycleState.resumed) {
+      // 포그라운드 복귀 시 preview 재개 또는 카메라 재초기화
+      if (_captureActive) {
+        if (_camCtrl != null && _camCtrl!.value.isInitialized) {
+          try { _camCtrl!.resumePreview(); } catch (_) {}
+        } else {
+          _ensureCameraReady();
+        }
+      }
+      if (Platform.isAndroid) _setupOverlay();
+      // CameraBackgroundService는 stopCapture()에서만 종료
+      // resumed에서 종료하면 이후 백그라운드 촬영이 차단됨
     }
   }
 
   Future<void> _ensureCameraReady() async {
     if (_camCtrl != null && _camCtrl!.value.isInitialized) return;
+    // 이전 컨트롤러가 있으면 먼저 해제 (해제 없이 새로 만들면 카메라 충돌)
+    if (_camCtrl != null) {
+      try { await _camCtrl!.dispose(); } catch (_) {}
+      _camCtrl = null;
+    }
     final cameras = await availableCameras();
     if (cameras.isEmpty) return;
     final cam = cameras.firstWhere(
@@ -192,30 +264,55 @@ class _MainScreenState extends State<MainScreen>
     );
   }
 
-  Future<void> _startForegroundService() async {
+  // 앱 시작 시 포그라운드 서비스 시작 (센서 백그라운드 유지용)
+  Future<void> _startSensorForegroundService() async {
     if (await FlutterForegroundTask.isRunningService) return;
     await FlutterForegroundTask.startService(
       serviceId:         256,
-      notificationTitle: '포스처가드 측정 중 🔴',
-      notificationText:  '2분마다 자동 촬영합니다. 탭해서 앱 열기.',
-      notificationButtons: [
-        const NotificationButton(id: 'stop_btn', text: '측정 중지'),
-      ],
-      callback: _postureTaskCallback,
+      notificationTitle: '포스처가드',
+      notificationText:  '자세를 감지하고 있습니다.',
+      callback:          _postureTaskCallback,
     );
-
-    // 알림 버튼 '중지' 처리
     FlutterForegroundTask.addTaskDataCallback((data) {
       if (data == 'stop') stopCapture();
     });
   }
 
-  Future<void> _stopForegroundService() async {
-    FlutterForegroundTask.removeTaskDataCallback(_noopCallback);
-    await FlutterForegroundTask.stopService();
+  // 카메라 캡처 시작 → 알림을 "측정 중"으로 업데이트
+  Future<void> _startForegroundService() async {
+    if (await FlutterForegroundTask.isRunningService) {
+      await FlutterForegroundTask.updateService(
+        notificationTitle: '포스처가드 측정 중 🔴',
+        notificationText:  '2분마다 자동 촬영합니다. 탭해서 앱 열기.',
+        notificationButtons: [
+          const NotificationButton(id: 'stop_btn', text: '측정 중지'),
+        ],
+      );
+    } else {
+      // 서비스가 없으면 새로 시작 (혹시 종료된 경우 대비)
+      await FlutterForegroundTask.startService(
+        serviceId:         256,
+        notificationTitle: '포스처가드 측정 중 🔴',
+        notificationText:  '2분마다 자동 촬영합니다. 탭해서 앱 열기.',
+        notificationButtons: [
+          const NotificationButton(id: 'stop_btn', text: '측정 중지'),
+        ],
+        callback: _postureTaskCallback,
+      );
+      FlutterForegroundTask.addTaskDataCallback((data) {
+        if (data == 'stop') stopCapture();
+      });
+    }
   }
 
-  static void _noopCallback(Object data) {}
+  // 카메라 캡처 중지 → 알림을 "감지 중"으로 복원 (서비스는 유지)
+  Future<void> _stopForegroundService() async {
+    await FlutterForegroundTask.updateService(
+      notificationTitle: '포스처가드',
+      notificationText:  '자세를 감지하고 있습니다.',
+      notificationButtons: [],
+    );
+  }
 
   // ── 주기적 카메라 캡처 ──────────────────────────────────────────
   Future<void> startCapture() async {
@@ -223,48 +320,147 @@ class _MainScreenState extends State<MainScreen>
     final status = await Permission.camera.request();
     if (!status.isGranted) return;
 
-    if (_camCtrl == null || !_camCtrl!.value.isInitialized) {
-      final cameras = await availableCameras();
-      if (cameras.isEmpty) return;
-      final cam = cameras.firstWhere(
-        (c) => c.lensDirection == CameraLensDirection.front,
-        orElse: () => cameras.first,
-      );
-      _camCtrl = CameraController(cam, ResolutionPreset.low, enableAudio: false);
-      await _camCtrl!.initialize();
+    // 로컬 분석 모드(Camera2)에서는 Flutter CameraController 불필요
+    // _useLocalAnalysis = false(서버 방식)일 때만 초기화
+    if (!_useLocalAnalysis) {
+      try {
+        await _ensureCameraReady();
+      } catch (e) {
+        debugPrint('[startCapture] 카메라 초기화 실패: $e');
+        return;
+      }
+      if (_camCtrl == null || !_camCtrl!.value.isInitialized) return;
     }
 
     await WakelockPlus.enable();
-    await _startForegroundService(); // 상단 알림 + 백그라운드 유지
+    await _startForegroundService();
+    if (Platform.isAndroid) await OverlayChannel.startCameraService();
     setState(() { _captureActive = true; _lastCaptureTime = null; });
 
-    await _captureOnce(); // 즉시 첫 촬영
-    _captureTimer = Timer.periodic(
-        const Duration(minutes: 2), (_) => _captureOnce());
+    await _captureOnce(); // 즉시 첫 촬영 (calibrating일 수 있음)
+
+    // calibration(5초) 직후 두 번째 촬영으로 즉시 점수 획득
+    // 이후 촬영은 센서 거북목 감지로만 트리거
+    Future.delayed(const Duration(seconds: 6), () {
+      if (_captureActive) _captureOnce();
+    });
   }
 
   void stopCapture() {
     _captureTimer?.cancel();
     _stopForegroundService();
+    OverlayChannel.stopCameraService(); // 카메라 백그라운드 서비스 중지
     WakelockPlus.disable();
     setState(() { _captureActive = false; _pendingCapture = false; });
   }
 
-  Future<void> _captureOnce() async {
-    if (!_captureActive || !_connected) return;
-    if (_camCtrl == null || !_camCtrl!.value.isInitialized) return;
+  // 센서가 거북목 5초 지속 감지 시 자동 호출
+  Future<void> _onTurtleNeckDetected() async {
+    if (!_useLocalAnalysis && !_connected) return;
+    debugPrint('[Trigger] 거북목 트리거 → captureActive=$_captureActive background=$_appInBackground');
     try {
-      final xFile = await _camCtrl!.takePicture();
-      final bytes = await File(xFile.path).readAsBytes();
-      setState(() {
-        _pendingCapture  = true;
-        _lastCaptureTime = DateTime.now();
-      });
-      _channel?.sink.add(jsonEncode({'type': 'frame', 'frame': base64Encode(bytes)}));
+      if (!_captureActive) {
+        await startCapture();
+      } else {
+        await _captureOnce();
+      }
     } catch (e) {
-      debugPrint('[Capture] $e');
-      setState(() => _pendingCapture = false);
+      debugPrint('[Trigger] 카메라 실행 오류: $e');
     }
+  }
+
+  // ── 네이티브 OverlayService 시작 ──────────────────────────────
+  Future<void> _setupOverlay() async {
+    if (!Platform.isAndroid) return;
+    try {
+      await OverlayChannel.start();
+      await OverlayChannel.update(_sensorPosture);
+    } catch (e) {
+      debugPrint('[Overlay] 오버레이 시작 실패: $e');
+    }
+  }
+
+  Future<void> _captureOnce() async {
+    if (!_captureActive) return;
+    if (!_useLocalAnalysis && !_connected) return;
+
+    List<int>? bytes;
+
+    if (_useLocalAnalysis) {
+      // ── B안: Kotlin Camera2 직접 촬영 (Activity lifecycle 무관) ──
+      debugPrint('[Capture] Native Camera2 촬영 시도');
+      bytes = await NativeCameraChannel.captureImage();
+      if (bytes == null) {
+        debugPrint('[Capture] Native Camera2 실패');
+        return;
+      }
+    } else {
+      // ── 서버 방식: Flutter CameraController 사용 ─────────────────
+      await _ensureCameraReady();
+      if (_camCtrl == null || !_camCtrl!.value.isInitialized) return;
+      try {
+        if (_camCtrl!.value.isPreviewPaused) {
+          try { await _camCtrl!.resumePreview(); } catch (_) {}
+        }
+        final xFile = await _camCtrl!.takePicture();
+        bytes = await File(xFile.path).readAsBytes();
+      } catch (e) {
+        debugPrint('[Capture] Flutter camera 오류: $e');
+        try { await _camCtrl?.dispose(); } catch (_) {}
+        _camCtrl = null;
+        return;
+      }
+    }
+
+    setState(() {
+      _pendingCapture  = true;
+      _lastCaptureTime = DateTime.now();
+    });
+
+    if (_useLocalAnalysis) {
+      final result = await PoseAnalyzerChannel.analyze(bytes);
+      if (result != null) {
+        _handlePostureResult(result);
+      } else {
+        setState(() => _pendingCapture = false);
+      }
+    } else {
+      _channel?.sink.add(jsonEncode({'type': 'frame', 'frame': base64Encode(bytes)}));
+    }
+  }
+
+  /// WebSocket 응답과 로컬 분석 결과를 동일하게 처리
+  void _handlePostureResult(PostureState next) {
+    if (!mounted) return;
+    setState(() {
+      _data = next;
+      if (next.status == 'ok' || next.status == 'warning') {
+        _scoreHistory.add(next.score.toDouble());
+        if (_scoreHistory.length > kGraphMax) _scoreHistory.removeAt(0);
+        for (final k in _subHistory.keys) {
+          _subHistory[k]!.add(next.scores[k] ?? 1.0);
+          if (_subHistory[k]!.length > kGraphMax) _subHistory[k]!.removeAt(0);
+        }
+        if (_pendingCapture) {
+          _pendingCapture = false;
+          final pitchDeg = (1.0 - (next.scores['pitch'] ?? 1.0)) * 20.0;
+          final snap = PostureSnapshot(
+            time:     _lastCaptureTime ?? DateTime.now(),
+            score:    next.score,
+            pitchDeg: pitchDeg,
+          );
+          _captureHistory.add(snap);
+          _snapshots.add(snap);
+          _saveHistory(); // 새 기록을 즉시 저장
+          // 오버레이에 점수 표시 (사진 촬영 결과)
+          if (Platform.isAndroid) {
+            OverlayChannel.updateWithScore(_sensorPosture, next.score);
+          }
+        }
+      } else {
+        _pendingCapture = false;
+      }
+    });
   }
 
   // ── WebSocket 연결 ──────────────────────────────────────────────
@@ -292,30 +488,7 @@ class _MainScreenState extends State<MainScreen>
         (raw) {
           if (!mounted) return;
           final json = jsonDecode(raw as String) as Map<String, dynamic>;
-          final next = PostureState.fromJson(json);
-          setState(() {
-            _data = next;
-            if (next.status == 'ok' || next.status == 'warning') {
-              _scoreHistory.add(next.score.toDouble());
-              if (_scoreHistory.length > kGraphMax) _scoreHistory.removeAt(0);
-              for (final k in _subHistory.keys) {
-                _subHistory[k]!.add(next.scores[k] ?? 1.0);
-                if (_subHistory[k]!.length > kGraphMax) _subHistory[k]!.removeAt(0);
-              }
-              // 캡처 응답 처리: 사진 촬영 후 서버 응답이 왔을 때 기록
-              if (_pendingCapture) {
-                _pendingCapture = false;
-                final pitchDeg = (1.0 - (next.scores['pitch'] ?? 1.0)) * 20.0;
-                final snap = PostureSnapshot(
-                  time: _lastCaptureTime ?? DateTime.now(),
-                  score: next.score,
-                  pitchDeg: pitchDeg,
-                );
-                _captureHistory.add(snap);
-                _snapshots.add(snap);
-              }
-            }
-          });
+          _handlePostureResult(PostureState.fromJson(json));
         },
         onError: (_) { if (_channel == ch) _onDisconnect(); },
         onDone:  ()  { if (_channel == ch) _onDisconnect(); },
@@ -343,6 +516,43 @@ class _MainScreenState extends State<MainScreen>
   }
 
   // 모바일에서 IP 변경 시 재연결
+  // ── 점수 기록 영속화 ──────────────────────────────────────────
+  static const _kSnapKey = 'capture_history_v1';
+
+  Future<void> _saveHistory() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final json = jsonEncode(
+        _captureHistory.map((s) => s.toJson()).toList(),
+      );
+      await prefs.setString(_kSnapKey, json);
+    } catch (e) {
+      debugPrint('[Storage] 저장 실패: $e');
+    }
+  }
+
+  Future<void> _loadHistory() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw   = prefs.getString(_kSnapKey);
+      if (raw == null || raw.isEmpty) return;
+      final list = (jsonDecode(raw) as List)
+          .map((e) => PostureSnapshot.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList();
+      if (!mounted) return;
+      setState(() {
+        _captureHistory
+          ..clear()
+          ..addAll(list);
+        _snapshots
+          ..clear()
+          ..addAll(list);
+      });
+    } catch (e) {
+      debugPrint('[Storage] 로드 실패: $e');
+    }
+  }
+
   void _onServerIpChanged(String ip) {
     setState(() => _serverIp = ip);
     _reconnectDelay = 2;
@@ -364,6 +574,12 @@ class _MainScreenState extends State<MainScreen>
     _warnAnim.dispose();
     WakelockPlus.disable();
     if (Platform.isWindows) _killServer();
+    if (Platform.isAndroid) {
+      _sensorClassifier?.dispose();
+      FlutterForegroundTask.stopService();
+      OverlayChannel.stop();
+      if (_useLocalAnalysis) PoseAnalyzerChannel.close();
+    }
     super.dispose();
   }
 
@@ -376,6 +592,9 @@ class _MainScreenState extends State<MainScreen>
         scoreHistory: _scoreHistory,
         todayScore: _todayScore,
         snapshotCount: _snapshots.length,
+        currentTitle: _snapshots.isNotEmpty
+            ? titleFromScore(ScoreAverages.from(_snapshots).overall)
+            : null,
       ),
       ReportTab(data: _data, snapshots: _snapshots, todayScore: _todayScore),
       CameraTab(
@@ -386,10 +605,11 @@ class _MainScreenState extends State<MainScreen>
         onStart:         startCapture,
         onStop:          stopCapture,
       ),
-      const RewardTab(),
+      RewardTab(snapshots: _snapshots),
       ProfileTab(
         serverIp: _serverIp,
-        onServerIpChanged: _onServerIpChanged, // 항상 표시
+        onServerIpChanged: _onServerIpChanged,
+        onOverlayStart: Platform.isAndroid ? _setupOverlay : null,
       ),
     ];
 

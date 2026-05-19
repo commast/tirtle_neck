@@ -37,6 +37,10 @@ dependencies:
   permission_handler: ^11.3.1  # 카메라 권한
   wakelock_plus: ^1.3.4        # 백그라운드 측정 중 화면 꺼짐 방지
   flutter_foreground_task: ^8.0.2 # 포그라운드 서비스 (백그라운드 카메라 유지)
+  sensors_plus: ^6.1.0            # 가속도계 + 자이로스코프
+  tflite_flutter: ^0.11.0         # TFLite 추론 (센서 자세 분류)
+  # flutter_overlay_window 제거 — 네이티브 Kotlin OverlayService로 대체됨
+  shared_preferences: ^2.5.5
 
 dev_dependencies:
   flutter_test:
@@ -59,6 +63,9 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+  assets:
+    - assets/posture_model.tflite
 
   # To add assets to your application, add an assets section, like this:
   # assets:

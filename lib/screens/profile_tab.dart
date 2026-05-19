@@ -4,11 +4,13 @@ import '../constants.dart';
 class ProfileTab extends StatefulWidget {
   final String               serverIp;
   final ValueChanged<String>? onServerIpChanged; // null이면 Windows (숨김)
+  final VoidCallback?        onOverlayStart;     // 오버레이 수동 시작
 
   const ProfileTab({
     super.key,
     required this.serverIp,
     this.onServerIpChanged,
+    this.onOverlayStart,
   });
 
   @override
@@ -64,6 +66,12 @@ class _ProfileTabState extends State<ProfileTab> {
             const SizedBox(height: 10),
           ],
 
+          // 오버레이 수동 시작 카드 (Android 전용)
+          if (widget.onOverlayStart != null) ...[
+            _overlayCard(),
+            const SizedBox(height: 10),
+          ],
+
           ..._settings.map((s) => Container(
             margin: const EdgeInsets.only(bottom: 10),
             decoration: BoxDecoration(
@@ -85,6 +93,51 @@ class _ProfileTabState extends State<ProfileTab> {
           const SizedBox(height: 100),
         ]),
       ),
+    );
+  }
+
+  Widget _overlayCard() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.purple.withValues(alpha: 0.3)),
+        boxShadow: [BoxShadow(
+          color: Colors.black.withValues(alpha: 0.04), blurRadius: 6)],
+      ),
+      child: Row(children: [
+        Container(
+          width: 40, height: 40,
+          decoration: BoxDecoration(
+            color: Colors.purple.withValues(alpha: 0.1),
+            shape: BoxShape.circle,
+          ),
+          child: const Icon(Icons.picture_in_picture_rounded,
+              color: Colors.purple, size: 20),
+        ),
+        const SizedBox(width: 12),
+        const Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('자세 오버레이',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+            Text('다른 앱 위에 센서 상태 표시',
+                style: TextStyle(fontSize: 11, color: Colors.grey)),
+          ]),
+        ),
+        ElevatedButton(
+          onPressed: widget.onOverlayStart,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.purple,
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10)),
+            elevation: 0,
+          ),
+          child: const Text('시작', style: TextStyle(fontSize: 13)),
+        ),
+      ]),
     );
   }
 
