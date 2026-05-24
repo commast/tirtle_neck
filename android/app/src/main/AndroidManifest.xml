@@ -1,5 +1,14 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- 포그라운드 앱 패키지명 조회 (사용자가 시스템 설정에서 직접 허용해야 함) -->
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions"/>
+    <!-- 통화 상태 감지 -->
+    <uses-permission android:name="android.permission.READ_PHONE_STATE"/>
+    <!-- 이어폰 헤드 트래커 (실험적 기능): BT 장치 조회 + 고샘플링 센서 접근 -->
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
+    <uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <uses-permission android:name="android.permission.CAMERA"/>
     <uses-feature android:name="android.hardware.camera" android:required="false"/>
@@ -88,6 +97,13 @@
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
+        </intent>
+        <!-- Android 11+ 패키지 가시성: 런처에서 열 수 있는 모든 앱의
+             라벨/카테고리를 읽기 위해 필요. ApplicationInfo.category 와
+             PackageManager.getApplicationLabel 이 정상 동작하게 됨. -->
+        <intent>
+            <action android:name="android.intent.action.MAIN"/>
+            <category android:name="android.intent.category.LAUNCHER"/>
         </intent>
     </queries>
 </manifest>

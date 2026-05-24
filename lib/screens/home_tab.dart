@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import '../constants.dart';
 import '../models/posture_state.dart';
-import '../models/title_system.dart';
 import '../painters/arc_gauge_painter.dart';
 import '../painters/area_line_painter.dart';
 
@@ -11,7 +10,6 @@ class HomeTab extends StatefulWidget {
   final List<double>  scoreHistory;
   final int           todayScore;
   final int           snapshotCount;
-  final PostureTitle? currentTitle; // null = 측정 전
 
   const HomeTab({
     super.key,
@@ -20,7 +18,6 @@ class HomeTab extends StatefulWidget {
     required this.scoreHistory,
     required this.todayScore,
     required this.snapshotCount,
-    this.currentTitle,
   });
 
   @override
@@ -51,11 +48,6 @@ class _HomeTabState extends State<HomeTab> {
                     style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 12),
                 _buildIssueCards(),
-                const SizedBox(height: 24),
-                const Text('전문가 가이드',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 12),
-                _buildGuideCards(),
                 const SizedBox(height: 100),
               ]),
             ),
@@ -66,30 +58,9 @@ class _HomeTabState extends State<HomeTab> {
   }
 
   Widget _buildAppBarRow() {
-    final title = widget.currentTitle;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // ── 칭호 배지 (측정 기록 있을 때만 표시) ─────────────────
-        if (title != null) ...[
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            decoration: BoxDecoration(
-              color: title.color.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: title.color.withValues(alpha: 0.3)),
-            ),
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              Text(title.emoji, style: const TextStyle(fontSize: 14)),
-              const SizedBox(width: 6),
-              Text(title.name,
-                  style: TextStyle(
-                      fontSize: 12, color: title.color,
-                      fontWeight: FontWeight.w700)),
-            ]),
-          ),
-          const SizedBox(height: 8),
-        ],
         Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
@@ -366,62 +337,6 @@ class _HomeTabState extends State<HomeTab> {
     );
   }
 
-  Widget _buildGuideCards() {
-    const guides = [
-      _GuideData('거북목 예방\n스트레칭', '목을 앞으로\n내밀지 마세요', Icons.fitness_center),
-      _GuideData('올바른\n앉기 자세', '척추를 곧게\n세우세요', Icons.chair_rounded),
-      _GuideData('눈 피로\n완화법', '20-20-20\n규칙을 따르세요', Icons.visibility_rounded),
-      _GuideData('어깨 스트레칭', '매 시간 간단한\n스트레칭', Icons.self_improvement),
-    ];
-
-    return SizedBox(
-      height: 158,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        itemCount: guides.length,
-        separatorBuilder: (_, idx) => const SizedBox(width: 12),
-        itemBuilder: (ctx, i) {
-          final g = guides[i];
-          return Container(
-            width: 150,
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(16),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.05), blurRadius: 6,
-                ),
-              ],
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 36, height: 36,
-                  decoration: BoxDecoration(
-                    color: kGreen.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Icon(g.icon, color: kGreen, size: 20),
-                ),
-                const SizedBox(height: 8),
-                Text(g.title,
-                    maxLines: 2, overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                        fontWeight: FontWeight.bold, fontSize: 12)),
-                const SizedBox(height: 4),
-                Text(g.subtitle,
-                    maxLines: 2, overflow: TextOverflow.ellipsis,
-                    style: TextStyle(fontSize: 10, color: Colors.grey[500])),
-              ],
-            ),
-          );
-        },
-      ),
-    );
-  }
 }
 
 class _IssueData {
@@ -429,10 +344,4 @@ class _IssueData {
   final IconData icon;
   final Color    color;
   const _IssueData(this.name, this.status, this.icon, this.color);
-}
-
-class _GuideData {
-  final String   title, subtitle;
-  final IconData icon;
-  const _GuideData(this.title, this.subtitle, this.icon);
 }

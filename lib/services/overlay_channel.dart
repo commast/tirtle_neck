@@ -1,8 +1,10 @@
 import 'dart:io';
 import 'package:flutter/services.dart';
-import '../models/sensor_posture.dart';
+import '../models/detected_context.dart';
+import '../models/neck_risk.dart';
 
-/// 네이티브 Android OverlayService 와 통신하는 채널
+/// 네이티브 Android OverlayService 와 통신하는 채널.
+/// 분할 레이아웃: [모드 칩] [위험 칩(정상이면 숨김)]
 class OverlayChannel {
   static const _ch       = MethodChannel('com.example.tirtle_ml/overlay');
   static const _cameraCh = MethodChannel('com.example.tirtle_ml/camera_bg');
@@ -23,51 +25,61 @@ class OverlayChannel {
     if (!Platform.isAndroid) return;
     try {
       await _ch.invokeMethod('start');
-    } catch (e) {
-      // ignore
-    }
+    } catch (_) {}
   }
 
-  static Future<void> update(SensorPosture posture) async {
+  /// 측정 버튼 탭 콜백 등록 (Kotlin → Flutter).
+  /// [main_screen]에서 한 번만 등록.
+  static void setCalibrateTappedHandler(void Function() handler) {
     if (!Platform.isAndroid) return;
-    try {
-      await _ch.invokeMethod('update', {
-        'label': posture.label,
-        'color': _colorHex(posture),
-      });
-    } catch (e) {
-      // ignore
-    }
+    _ch.setMethodCallHandler((call) async {
+      if (call.method == 'onCalibrateTapped') {
+        handler();
+      }
+    });
   }
 
-  /// 사진 촬영 결과를 오버레이에 표시 (자세 + 점수)
-  static Future<void> updateWithScore(SensorPosture posture, int score) async {
+  /// 모드 + 위험 레벨로 오버레이 갱신.
+  /// - 모드 칩: 컨텍스트별 색 + 라벨 (영상/게임/소셜/학습/...)
+  /// - 위험 칩: 정상이면 숨김, 주의=주황, 위험=빨강
+  /// - 측정 버튼: [showCalibrateBtn]=true 면 표시. 캘리브레이션 중이면
+  ///   [calibrateBtnText]로 카운트다운 등 표시 가능 ("측정 중 3" 등).
+  static Future<void> updateSplit({
+    required DetectedContext mode,
+    required NeckRiskLevel risk,
+    String? appLabel,
+    int? score,
+    bool   showCalibrateBtn = false,
+    String? calibrateBtnText,
+  }) async {
     if (!Platform.isAndroid) return;
     try {
-      await _ch.invokeMethod('update', {
-        'label': '${posture.label} $score점',
-        'color': _colorHex(posture),
+      final modeText = _buildModeText(mode, appLabel);
+      final riskText = risk == NeckRiskLevel.normal
+          ? null
+          : (score != null ? '${risk.label} $score점' : risk.label);
+      await _ch.invokeMethod('updateSplit', {
+        'modeLabel': modeText,
+        'modeColor': mode.modeColorHex,
+        'riskLabel': riskText,
+        'riskColor': risk == NeckRiskLevel.normal ? null : risk.colorHex,
+        'showCalibrateBtn': showCalibrateBtn,
+        'calibrateBtnText': calibrateBtnText,
       });
-    } catch (e) {
-      // ignore
-    }
+    } catch (_) {}
+  }
+
+  static String _buildModeText(DetectedContext mode, String? appLabel) {
+    final base = mode.overlayLabel ?? '대기';
+    if (appLabel == null || appLabel.isEmpty) return base;
+    final trimmed = appLabel.length > 10 ? '${appLabel.substring(0, 10)}…' : appLabel;
+    return '$base · $trimmed';
   }
 
   static Future<void> stop() async {
     if (!Platform.isAndroid) return;
     try {
       await _ch.invokeMethod('stop');
-    } catch (e) {
-      // ignore
-    }
+    } catch (_) {}
   }
-
-  static String _colorHex(SensorPosture p) => switch (p) {
-    SensorPosture.inactive   => '#9E9E9E',
-    SensorPosture.normal     => '#00C896',
-    SensorPosture.turtleNeck => '#FF9800',
-    SensorPosture.desk       => '#2196F3',
-    SensorPosture.sideLying  => '#00838F',
-    SensorPosture.lying      => '#9C27B0',
-  };
 }

@@ -41,14 +41,20 @@ class CameraBackgroundService : Service() {
             .setSmallIcon(android.R.drawable.ic_menu_camera)
             .build()
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            // Android 10+ : foregroundServiceType 명시
-            startForeground(
-                NOTIFICATION_ID, notification,
-                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
-            )
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    NOTIFICATION_ID, notification,
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+        } catch (e: Exception) {
+            // Android 14+ ForegroundServiceStartNotAllowedException 등 방어
+            // foreground 선언 실패해도 카메라 캡처(MainActivity 컨텍스트)는 계속 동작
+            android.util.Log.w("CameraBgSvc", "startForeground 실패 (무시): ${e.message}")
+            stopSelf()
         }
     }
 

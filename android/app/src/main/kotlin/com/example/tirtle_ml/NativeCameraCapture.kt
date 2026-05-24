@@ -16,11 +16,7 @@ import java.io.ByteArrayOutputStream
 
 /**
  * Activity lifecycle과 독립적인 Camera2 기반 캡처.
- *
- * 중요: Camera2 ImageReader는 JPEG_ORIENTATION EXIF 태그를 쓰지만
- * BitmapFactory.decodeByteArray()는 이를 자동 적용하지 않는다.
- * → captureImage()에서 sensorOrientation 만큼 직접 회전시켜 반환한다.
- * → PoseAnalyzer가 가로 이미지를 받지 않도록 보장.
+ * capturing 플래그로 동시 캡처 재진입을 방지한다.
  */
 class NativeCameraCapture(private val context: Context) {
 
@@ -33,17 +29,25 @@ class NativeCameraCapture(private val context: Context) {
     private val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
     private val thread = HandlerThread("NativeCamThread").apply { start() }
     private val handler = Handler(thread.looper)
+    @Volatile private var capturing = false
 
     @SuppressLint("MissingPermission")
     fun captureImage(callback: (ByteArray?) -> Unit) {
+        if (capturing) {
+            Log.w(TAG, "이전 캡처 진행 중 — 요청 무시")
+            callback(null)
+            return
+        }
+        capturing = true
+
         val cameraId = getFrontCameraId()
         if (cameraId == null) {
             Log.e(TAG, "전면 카메라를 찾을 수 없음")
+            capturing = false
             callback(null)
             return
         }
 
-        // sensorOrientation을 미리 가져와서 ImageReader 콜백에서 사용
         val sensorOrientation =
             cameraManager.getCameraCharacteristics(cameraId)
                 .get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 270
@@ -52,22 +56,29 @@ class NativeCameraCapture(private val context: Context) {
         val reader = ImageReader.newInstance(size.width, size.height, ImageFormat.JPEG, 2)
         Log.d(TAG, "캡처 시작 — ${size.width}×${size.height} sensorOrientation=$sensorOrientation")
 
+        // 모든 종료 경로에서 capturing = false 보장
+        fun done(bytes: ByteArray?) {
+            capturing = false
+            callback(bytes)
+        }
+
         reader.setOnImageAvailableListener({ r ->
             val image = r.acquireLatestImage()
-            if (image == null) { callback(null); reader.close(); return@setOnImageAvailableListener }
+            if (image == null) {
+                reader.close()
+                done(null)
+                return@setOnImageAvailableListener
+            }
 
             val buffer = image.planes[0].buffer
             val raw    = ByteArray(buffer.remaining())
             buffer.get(raw)
             image.close()
 
-            // ── 회전 보정 ────────────────────────────────────────────
-            // Camera2는 픽셀 데이터를 센서 원래 방향(보통 가로)으로 반환.
-            // BitmapFactory는 EXIF 태그를 무시하므로 직접 회전해야 한다.
             val correctedBytes = applyRotation(raw, sensorOrientation)
             Log.d(TAG, "캡처 완료 (${correctedBytes.size} bytes, 회전 ${sensorOrientation}°)")
-            callback(correctedBytes)
             reader.close()
+            done(correctedBytes)
         }, handler)
 
         cameraManager.openCamera(cameraId, object : CameraDevice.StateCallback() {
@@ -81,8 +92,6 @@ class NativeCameraCapture(private val context: Context) {
                             ).apply {
                                 addTarget(reader.surface)
                                 set(CaptureRequest.JPEG_QUALITY, 85.toByte())
-                                // JPEG_ORIENTATION 미설정 → EXIF 태그 없음
-                                // 회전은 위 콜백에서 직접 처리
                                 set(CaptureRequest.CONTROL_AF_MODE,
                                     CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
                                 set(CaptureRequest.CONTROL_AE_MODE,
@@ -97,6 +106,7 @@ class NativeCameraCapture(private val context: Context) {
                                         result: TotalCaptureResult
                                     ) {
                                         s.close(); camera.close()
+                                        // done()은 ImageReader 콜백에서 호출됨
                                     }
                                     override fun onCaptureFailed(
                                         s: CameraCaptureSession,
@@ -105,34 +115,29 @@ class NativeCameraCapture(private val context: Context) {
                                     ) {
                                         Log.e(TAG, "캡처 실패: ${failure.reason}")
                                         s.close(); camera.close()
-                                        reader.close(); callback(null)
+                                        reader.close(); done(null)
                                     }
                                 }, handler)
                         }
                         override fun onConfigureFailed(session: CameraCaptureSession) {
                             Log.e(TAG, "세션 구성 실패")
-                            camera.close(); reader.close(); callback(null)
+                            camera.close(); reader.close(); done(null)
                         }
                     }, handler)
             }
             override fun onDisconnected(camera: CameraDevice) {
-                camera.close(); reader.close(); callback(null)
+                camera.close(); reader.close(); done(null)
             }
             override fun onError(camera: CameraDevice, error: Int) {
                 Log.e(TAG, "카메라 오류: $error")
-                camera.close(); reader.close(); callback(null)
+                camera.close(); reader.close(); done(null)
             }
         }, handler)
     }
 
-    /**
-     * JPEG bytes를 디코딩 → sensorOrientation 만큼 회전 → 재인코딩.
-     * PoseAnalyzer가 올바른 세로(portrait) 이미지를 받도록 보장한다.
-     * 전면 카메라의 좌우 반전(mirror)은 PoseAnalyzer에서 처리.
-     */
     private fun applyRotation(jpeg: ByteArray, degrees: Int): ByteArray {
         if (degrees == 0) return jpeg
-        var bmp = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size) ?: return jpeg
+        val bmp = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size) ?: return jpeg
         val matrix = Matrix().apply { postRotate(degrees.toFloat()) }
         val rotated = Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, matrix, true)
         bmp.recycle()

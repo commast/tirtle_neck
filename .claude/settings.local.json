@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/Users/main/flutter_project/**)",
+      "Bash(flutter create *)"
+    ]
+  }
+}
