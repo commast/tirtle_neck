@@ -216,26 +216,6 @@ if (gaming || watchingVideo) {
 
 ---
 
-## 7. 카메라 트리거 정책
-
-위험 단계가 5초 지속 (`_onSustainedRiskDetected`)되면:
-
-1. 컨텍스트가 `gaming` 또는 `watchingVideo` 이어야 함
-2. `CameraModeSettings`에서 그 모드 카메라 옵트인이 켜져 있어야 함
-3. 둘 다 만족하면 → `_captureOnce(fromTurtleNeck: true)` 실행
-4. 그 외 모드 (학습/소셜/통화/일반/책상) → 카메라 발사 안 함, 오버레이 위험 표시만
-
-권한 처리:
-- 센서 트리거 캡처: `Permission.camera.status`만 확인 (다이얼로그 X, 다른 앱 사용 중 방해 방지)
-- 수동 캡처 시작 (카메라 탭 버튼): `Permission.camera.request()` (다이얼로그 정상 표시)
-
-### 캡처 히스토리 정책
-
-`_captureOnce({bool fromTurtleNeck=false})`:
-- `fromTurtleNeck: true` (센서 트리거)  → `_snapshots.add()` + `_saveHistory()`
-- `false` (캘리브레이션, 수동 시작 직후 2회) → UI 점수만 표시, 히스토리 미기록
-
----
 
 ## 8. 네이티브 → Flutter 채널 맵
 
@@ -375,7 +355,6 @@ D/PhoneState: ...
 
 | 시나리오 | 오버레이 표시 | 카메라 발사 |
 |---|---|---|
-| 폰 가만히 책상 위 (수직) | `대기` 회색 만 | X |
 | 유튜브 켰음, 자세 좋음 | `영상 모드` 보라 만 | X |
 | 유튜브 보는데 약간 숙임 1분 | `영상 모드` 보라 + `주의` 주황 | X |
 | 유튜브 3분간 안 움직임 | `영상 모드` 보라 + `위험` 빨강 | 영상 옵트인 ON일 때만 |

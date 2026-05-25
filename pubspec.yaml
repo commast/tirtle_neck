@@ -41,6 +41,8 @@ dependencies:
   tflite_flutter: ^0.11.0         # TFLite 추론 (센서 자세 분류)
   # flutter_overlay_window 제거 — 네이티브 Kotlin OverlayService로 대체됨
   shared_preferences: ^2.5.5
+  fl_chart: ^0.69.0               # 차트 라이브러리 (도넛/스택바/라인)
+  flutter_ringtone_player: ^4.0.0+3 # 안드로이드 알림음 재생 (SystemSound.alert 가 안드로이드 no-op이라 대체)
 
 dev_dependencies:
   flutter_test:

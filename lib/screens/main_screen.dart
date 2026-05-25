@@ -16,16 +16,19 @@ import '../services/context_detector.dart';
 import '../services/overlay_channel.dart';
 import '../services/camera_mode_settings.dart';
 import '../services/posture_calibration.dart';
-import '../services/headphone_head_tracker.dart';
 import '../services/background_calibration_runner.dart';
 import '../models/detected_context.dart';
 import '../models/neck_risk.dart';
 import '../services/pose_analyzer_channel.dart';
 import '../services/native_camera_channel.dart';
+import '../services/usage_tracker_service.dart';
+import '../services/alert_settings.dart';
 import 'home_tab.dart';
 import 'report_tab.dart';
 import 'camera_tab.dart';
 import 'profile_tab.dart';
+
+enum _AlertPhase { idle, alerting, cooldown }
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -37,7 +40,6 @@ class _MainScreenState extends State<MainScreen>
     with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   int               _tabIndex  = 0;
   WebSocketChannel? _channel;
-  PostureState      _data      = PostureState.initial;
   bool              _connected = false;
   late AnimationController _warnAnim;
 
@@ -57,11 +59,18 @@ class _MainScreenState extends State<MainScreen>
   final List<PostureSnapshot> _captureHistory = [];
   DateTime?                   _lastCaptureTime;
 
-  // 모바일 서버 IP
-  String _serverIp = '';
-
   // 앱 백그라운드 여부 (센서 트리거 시 카메라 서비스 시작 판단용)
   bool _appInBackground = false;
+
+  // 센서 모니터링 활성화 여부 (FAB 토글). 앱 시작 시 false.
+  bool _sensorActive = false;
+  bool _sensorBusy   = false;
+
+  // 알람 듀티 사이클: 3초 알람 → 10초 쿨다운 → 반복 (자세 계속 나쁘면).
+  static const _alertVisibleDuration  = Duration(seconds: 3);
+  static const _alertCooldownDuration = Duration(seconds: 10);
+  _AlertPhase _alertPhase = _AlertPhase.idle;
+  Timer?      _alertPhaseTimer;
 
   // ── 센서 자세 분류기 + 컨텍스트 감지 (Android 전용) ──────────────
   SensorClassifier? _sensorClassifier;
@@ -70,7 +79,6 @@ class _MainScreenState extends State<MainScreen>
   NeckRiskState     _riskState        = NeckRiskState.initial;
   final CameraModeSettings   _cameraSettings   = CameraModeSettings();
   final PostureCalibration   _calibration      = PostureCalibration();
-  final HeadphoneHeadTracker _headphoneTracker = HeadphoneHeadTracker();
   final BackgroundCalibrationRunner _calRunner = BackgroundCalibrationRunner();
   bool _calibrationInProgress = false;
   // 현재 캡처가 거북목 트리거로 시작됐는지 여부. 히스토리 기록 분기에 사용.
@@ -80,8 +88,95 @@ class _MainScreenState extends State<MainScreen>
   ContextDetector?     get contextDetector  => _contextDetector;
   CameraModeSettings   get cameraSettings   => _cameraSettings;
   PostureCalibration   get calibration      => _calibration;
-  HeadphoneHeadTracker get headphoneTracker => _headphoneTracker;
   NeckRiskState        get riskState        => _riskState;
+
+  /// 센서 모니터링 시작 — SensorClassifier 생성 + 포그라운드 서비스 + 오버레이.
+  Future<void> _startSensorMonitoring() async {
+    if (!Platform.isAndroid) return;
+    _sensorClassifier ??= SensorClassifier(
+      onPostureChanged: (p) {
+        _contextDetector?.updateSensorPosture(p);
+      },
+      onRiskChanged: (risk) {
+        if (mounted) setState(() => _riskState = risk);
+        // 알람 듀티 사이클: idle 상태 + non-normal 이면 알람 발사.
+        // alerting/cooldown 중에는 사이클 끝까지 추가 발사 없음.
+        if (risk.level != NeckRiskLevel.normal) {
+          _fireAlertIfDue(risk.level);
+        }
+        _updateOverlay();
+      },
+      onTurtleNeckDetected: _onSustainedRiskDetected,
+      calibration: _calibration,
+    );
+    // 현재 컨텍스트를 분류기에 주입 (모드별 임계값 적용)
+    final ctx = _contextDetector?.context.value;
+    if (ctx != null) _sensorClassifier!.updateContext(ctx);
+    await _sensorClassifier!.start();
+    await _startSensorForegroundService();
+    await _setupOverlay();
+  }
+
+  /// 센서 모니터링 종료 — 구독 해제 + 포그라운드 서비스 중지.
+  Future<void> _stopSensorMonitoring() async {
+    if (!Platform.isAndroid) return;
+    _sensorClassifier?.dispose();
+    _sensorClassifier = null;
+    _cancelAlertCycle();
+    setState(() => _riskState = NeckRiskState.initial);
+    try { await FlutterForegroundTask.stopService(); } catch (_) {}
+    try { await OverlayChannel.stop(); } catch (_) {}
+  }
+
+  /// 알람 듀티 사이클 1번 발사 — idle 일 때만 동작.
+  /// 사운드/진동 + 사용량 기록 + alerting 페이즈 진입 (3초 타이머).
+  void _fireAlertIfDue(NeckRiskLevel level) {
+    if (_alertPhase != _AlertPhase.idle) return;
+    UsageTrackerService.instance.recordWarning();
+    AlertSettings.instance.triggerAlert(level);
+    _alertPhase = _AlertPhase.alerting;
+    _alertPhaseTimer?.cancel();
+    _alertPhaseTimer = Timer(_alertVisibleDuration, _onAlertVisibleEnd);
+  }
+
+  void _onAlertVisibleEnd() {
+    if (!mounted) return;
+    setState(() => _alertPhase = _AlertPhase.cooldown);
+    _updateOverlay(); // 오버레이를 normal 칩으로 마스킹
+    _alertPhaseTimer = Timer(_alertCooldownDuration, _onCooldownEnd);
+  }
+
+  void _onCooldownEnd() {
+    if (!mounted) return;
+    _alertPhase = _AlertPhase.idle;
+    final level = _riskState.level;
+    if (level != NeckRiskLevel.normal) {
+      _fireAlertIfDue(level);
+    }
+    _updateOverlay();
+  }
+
+  void _cancelAlertCycle() {
+    _alertPhaseTimer?.cancel();
+    _alertPhaseTimer = null;
+    _alertPhase = _AlertPhase.idle;
+  }
+
+  Future<void> _toggleSensor() async {
+    if (_sensorBusy) return;
+    setState(() => _sensorBusy = true);
+    try {
+      if (_sensorActive) {
+        await _stopSensorMonitoring();
+        setState(() => _sensorActive = false);
+      } else {
+        await _startSensorMonitoring();
+        setState(() => _sensorActive = true);
+      }
+    } finally {
+      if (mounted) setState(() => _sensorBusy = false);
+    }
+  }
 
   /// 오버레이 측정 버튼 탭 → 현재 컨텍스트에 대해 5초 백그라운드 캘리브레이션.
   Future<void> _handleOverlayCalibrateTapped() async {
@@ -118,18 +213,10 @@ class _MainScreenState extends State<MainScreen>
 
   static const _winTitle = '포스처가드 서버';
 
-  // 플랫폼에 따라 URL 결정
+  // 플랫폼에 따라 URL 결정 (현재는 _useLocalAnalysis=true 라 안 쓰임)
   String get _wsUrl {
     if (Platform.isWindows) return kServerUrl;
-    final ip = _serverIp.trim().isEmpty ? '192.168.0.1' : _serverIp.trim();
-    return 'ws://$ip:$kServerPort/ws/mobile';
-  }
-
-  int get _todayScore {
-    if (_snapshots.isEmpty) return 0;
-    return (_snapshots.map((s) => s.score).reduce((a, b) => a + b) /
-            _snapshots.length)
-        .round();
+    return 'ws://192.168.0.1:$kServerPort/ws/mobile';
   }
 
   @override
@@ -154,19 +241,8 @@ class _MainScreenState extends State<MainScreen>
     // 센서 분류기 + 포그라운드 서비스 시작 (Android 전용, 백그라운드 센서 유지)
     if (Platform.isAndroid) {
       _contextDetector = ContextDetector();
-      _sensorClassifier = SensorClassifier(
-        onPostureChanged: (p) {
-          _contextDetector?.updateSensorPosture(p);
-        },
-        onRiskChanged: (risk) {
-          if (mounted) setState(() => _riskState = risk);
-          _updateOverlay();
-        },
-        onTurtleNeckDetected: _onSustainedRiskDetected,
-        calibration: _calibration,
-      );
       _cameraSettings.load();
-      _headphoneTracker.start(); // 실험 기능: 이어폰 헤드 트래커 — docs/HEADPHONE_TRACKER.md
+      AlertSettings.instance.load();
       _calibration.load();
       // 오버레이 측정 버튼 탭 → 백그라운드 캘리브레이션 시작
       OverlayChannel.setCalibrateTappedHandler(_handleOverlayCalibrateTapped);
@@ -175,6 +251,7 @@ class _MainScreenState extends State<MainScreen>
         await Permission.phone.request();
         // PACKAGE_USAGE_STATS는 보호된 권한 — 사용자가 ProfileTab에서 직접 설정 화면을 열어 허용해야 함.
         await _contextDetector!.start();
+        await UsageTrackerService.instance.init(_contextDetector!);
         _contextDetector!.context.addListener(() {
           final ctx = _contextDetector!.context.value;
           _sensorClassifier?.updateContext(ctx);
@@ -185,9 +262,7 @@ class _MainScreenState extends State<MainScreen>
         _contextDetector!.snapshot.addListener(() {
           _updateOverlay();
         });
-        await _sensorClassifier!.start();
-        await _startSensorForegroundService();
-        await _setupOverlay();
+        // 센서/포그라운드 서비스/오버레이는 사용자가 FAB(센서 토글)를 눌러야 시작.
         // 온디바이스 모드: MediaPipe 모델 초기화 (백그라운드)
         if (_useLocalAnalysis) {
           final ok = await PoseAnalyzerChannel.initialize();
@@ -471,9 +546,13 @@ class _MainScreenState extends State<MainScreen>
     final btnText = calibrationCountdown != null
         ? (calibrationCountdown > 0 ? '측정 중 $calibrationCountdown' : '✓ 완료')
         : '🎯 측정';
+    // 쿨다운 중에는 오버레이 칩을 normal 로 마스킹.
+    final displayRisk = _alertPhase == _AlertPhase.cooldown
+        ? NeckRiskLevel.normal
+        : _riskState.level;
     OverlayChannel.updateSplit(
       mode: mode,
-      risk: _riskState.level,
+      risk: displayRisk,
       score: score,
       showCalibrateBtn: showBtn,
       calibrateBtnText: btnText,
@@ -570,7 +649,6 @@ class _MainScreenState extends State<MainScreen>
   void _handlePostureResult(PostureState next) {
     if (!mounted) return;
     setState(() {
-      _data = next;
       if (next.status == 'ok' || next.status == 'warning') {
         _scoreHistory.add(next.score.toDouble());
         if (_scoreHistory.length > kGraphMax) _scoreHistory.removeAt(0);
@@ -650,7 +728,7 @@ class _MainScreenState extends State<MainScreen>
     final old = _channel;
     _channel = null;
     old?.sink.close();
-    if (_connected) setState(() { _connected = false; _data = PostureState.initial; });
+    if (_connected) setState(() => _connected = false);
 
     _reconnectTimer?.cancel();
     _reconnectTimer = Timer(Duration(seconds: _reconnectDelay), () {
@@ -698,29 +776,18 @@ class _MainScreenState extends State<MainScreen>
     }
   }
 
-  void _onServerIpChanged(String ip) {
-    setState(() => _serverIp = ip);
-    _reconnectDelay = 2;
-    _isConnecting = false;
-    _reconnectTimer?.cancel();
-    final old = _channel;
-    _channel = null;
-    old?.sink.close();
-    _connect();
-  }
-
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _captureTimer?.cancel();
     _reconnectTimer?.cancel();
+    _alertPhaseTimer?.cancel();
     _camCtrl?.dispose();
     _channel?.sink.close();
     _warnAnim.dispose();
     WakelockPlus.disable();
     if (Platform.isWindows) _killServer();
     if (Platform.isAndroid) {
-      _headphoneTracker.dispose();
       _contextDetector?.dispose();
       _contextDetector = null;
       _sensorClassifier?.dispose();
@@ -734,14 +801,8 @@ class _MainScreenState extends State<MainScreen>
   @override
   Widget build(BuildContext context) {
     final screens = [
-      HomeTab(
-        data: _data,
-        connected: _connected,
-        scoreHistory: _scoreHistory,
-        todayScore: _todayScore,
-        snapshotCount: _snapshots.length,
-      ),
-      ReportTab(data: _data, snapshots: _snapshots, todayScore: _todayScore),
+      HomeTab(connected: _connected),
+      const ReportTab(),
       CameraTab(
         captureActive:   _captureActive,
         captureHistory:  _captureHistory,
@@ -751,13 +812,9 @@ class _MainScreenState extends State<MainScreen>
         onStop:          stopCapture,
       ),
       ProfileTab(
-        serverIp: _serverIp,
-        onServerIpChanged: _onServerIpChanged,
         onOverlayStart: Platform.isAndroid ? requestOverlayPermissionAndStart : null,
-        contextDetector: Platform.isAndroid ? _contextDetector : null,
         cameraSettings:  Platform.isAndroid ? _cameraSettings   : null,
         calibration:     Platform.isAndroid ? _calibration      : null,
-        headphoneTracker: Platform.isAndroid ? _headphoneTracker : null,
       ),
     ];
 
@@ -765,14 +822,21 @@ class _MainScreenState extends State<MainScreen>
       backgroundColor: kBg,
       body: screens[_tabIndex],
       floatingActionButton: FloatingActionButton(
-        backgroundColor: _captureActive ? Colors.red : kGreen,
+        backgroundColor: _sensorActive ? Colors.red : kGreen,
         elevation: 4,
         shape: const CircleBorder(),
-        onPressed: () => setState(() => _tabIndex = 2),
-        child: Icon(
-          _captureActive ? Icons.fiber_manual_record : Icons.camera_alt_rounded,
-          color: Colors.white, size: 26,
-        ),
+        onPressed: _sensorBusy ? null : _toggleSensor,
+        child: _sensorBusy
+            ? const SizedBox(
+                width: 22, height: 22,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2.5, color: Colors.white,
+                ),
+              )
+            : Icon(
+                _sensorActive ? Icons.sensors_off_rounded : Icons.sensors_rounded,
+                color: Colors.white, size: 26,
+              ),
       ),
       floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
       bottomNavigationBar: BottomAppBar(

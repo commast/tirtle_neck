@@ -1,30 +1,20 @@
 import 'package:flutter/material.dart';
 import '../constants.dart';
 import '../models/detected_context.dart';
-import '../models/sensor_posture.dart';
-import '../services/context_detector.dart';
 import '../services/camera_mode_settings.dart';
 import '../services/posture_calibration.dart';
-import '../services/headphone_head_tracker.dart';
+import '../services/alert_settings.dart';
 
 class ProfileTab extends StatefulWidget {
-  final String                serverIp;
-  final ValueChanged<String>? onServerIpChanged; // null이면 Windows (숨김)
   final VoidCallback?         onOverlayStart;    // 오버레이 수동 시작
-  final ContextDetector?      contextDetector;   // 컨텍스트 디버그용 (Android)
   final CameraModeSettings?   cameraSettings;    // 모드별 카메라 옵트인 (Android)
-  final PostureCalibration?    calibration;       // 모드별 baseline 자세
-  final HeadphoneHeadTracker?  headphoneTracker;  // 실험: 이어폰 헤드 트래커
+  final PostureCalibration?   calibration;       // 모드별 baseline 자세
 
   const ProfileTab({
     super.key,
-    required this.serverIp,
-    this.onServerIpChanged,
     this.onOverlayStart,
-    this.contextDetector,
     this.cameraSettings,
     this.calibration,
-    this.headphoneTracker,
   });
 
   @override
@@ -32,29 +22,6 @@ class ProfileTab extends StatefulWidget {
 }
 
 class _ProfileTabState extends State<ProfileTab> {
-  late final TextEditingController _ipCtrl;
-  bool _usageStatsGranted = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _ipCtrl = TextEditingController(text: widget.serverIp);
-    _refreshUsageStatsPermission();
-  }
-
-  @override
-  void dispose() {
-    _ipCtrl.dispose();
-    super.dispose();
-  }
-
-  Future<void> _refreshUsageStatsPermission() async {
-    final det = widget.contextDetector;
-    if (det == null) return;
-    final granted = await det.foregroundAppChannel.hasPermission();
-    if (mounted) setState(() => _usageStatsGranted = granted);
-  }
-
   @override
   Widget build(BuildContext context) {
     return SafeArea(
@@ -74,30 +41,10 @@ class _ProfileTabState extends State<ProfileTab> {
           Text('postureguard@email.com',
               style: TextStyle(color: Colors.grey[500], fontSize: 13)),
           const SizedBox(height: 24),
-          Row(children: [
-            Expanded(child: _statCard('총 측정일', '14일')),
-            const SizedBox(width: 10),
-            Expanded(child: _statCard('평균 점수', '78점')),
-            const SizedBox(width: 10),
-            Expanded(child: _statCard('총 토큰', '5개')),
-          ]),
-          const SizedBox(height: 20),
-
-          // 모바일에서만 서버 IP 설정 표시
-          if (widget.onServerIpChanged != null) ...[
-            _serverIpCard(),
-            const SizedBox(height: 10),
-          ],
 
           // 오버레이 수동 시작 카드 (Android 전용)
           if (widget.onOverlayStart != null) ...[
             _overlayCard(),
-            const SizedBox(height: 10),
-          ],
-
-          // 개인 자세 캘리브레이션 (Android 전용)
-          if (widget.calibration != null) ...[
-            _calibrationCard(),
             const SizedBox(height: 10),
           ],
 
@@ -107,37 +54,16 @@ class _ProfileTabState extends State<ProfileTab> {
             const SizedBox(height: 10),
           ],
 
-          // 컨텍스트 디버그 카드 (Android 전용)
-          if (widget.contextDetector != null) ...[
-            _contextDebugCard(),
+          // 하단 설정 리스트 (알람 설정은 펼침)
+          _alarmExpandable(),
+          const SizedBox(height: 10),
+          if (widget.calibration != null) ...[
+            _measurementExpandable(),
             const SizedBox(height: 10),
-          ],
-
-          // 실험: 이어폰 헤드 트래커 (Android 전용)
-          // 자세한 동작 설명: docs/HEADPHONE_TRACKER.md
-          if (widget.headphoneTracker != null) ...[
-            _headphoneCard(),
-            const SizedBox(height: 10),
-          ],
-
-          ..._settings.map((s) => Container(
-            margin: const EdgeInsets.only(bottom: 10),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(14),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.04), blurRadius: 6,
-                ),
-              ],
-            ),
-            child: ListTile(
-              leading: Icon(s.icon, color: kGreen),
-              title: Text(s.label),
-              trailing: const Icon(Icons.chevron_right, color: Colors.grey),
-              onTap: () {},
-            ),
-          )),
+          ] else
+            _plainListTile('측정 설정', Icons.tune_rounded, enabled: false),
+          _plainListTile('도움말',    Icons.help_outline_rounded, enabled: false),
+          _plainListTile('앱 정보',   Icons.info_outline_rounded, enabled: false),
           const SizedBox(height: 100),
         ]),
       ),
@@ -153,49 +79,59 @@ class _ProfileTabState extends State<ProfileTab> {
     DetectedContext.desk,
   ];
 
-  Widget _calibrationCard() {
+  Widget _measurementExpandable() {
     final cal = widget.calibration!;
     return AnimatedBuilder(
       animation: cal,
       builder: (context, _) {
         return Container(
-          padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: kGreen.withValues(alpha: 0.4)),
-            boxShadow: [BoxShadow(
-                color: Colors.black.withValues(alpha: 0.04), blurRadius: 6)],
-          ),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Row(children: [
-              const Icon(Icons.straighten_rounded, color: kGreen, size: 18),
-              const SizedBox(width: 6),
-              const Text('모드별 자세 기준',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-            ]),
-            const SizedBox(height: 4),
-            Text(
-              '각 모드에서 오버레이의 "🎯 측정" 버튼을 눌러 평상시 자세를 등록하세요.\n'
-              '등록된 모드에선 그 자세 기준으로 거북목을 판정합니다.',
-              style: TextStyle(fontSize: 11, color: Colors.grey[600])),
-            const SizedBox(height: 10),
-            for (final m in _calibratableModes) _modeRow(cal, m),
-            if (cal.calibratedModes.isNotEmpty) ...[
-              const SizedBox(height: 4),
-              Align(
-                alignment: Alignment.centerRight,
-                child: TextButton.icon(
-                  onPressed: () => cal.resetAll(),
-                  icon: const Icon(Icons.delete_outline, size: 14),
-                  label: const Text('전체 초기화', style: TextStyle(fontSize: 11)),
-                  style: TextButton.styleFrom(
-                      foregroundColor: Colors.grey[600],
-                      padding: const EdgeInsets.symmetric(horizontal: 8)),
-                ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.04), blurRadius: 6,
               ),
             ],
-          ]),
+          ),
+          child: Theme(
+            data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+            child: ExpansionTile(
+              tilePadding: const EdgeInsets.symmetric(horizontal: 16),
+              childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+              leading: const Icon(Icons.tune_rounded, color: kGreen),
+              title: const Text('측정 설정', style: TextStyle(fontSize: 14)),
+              subtitle: Text(
+                '모드별 자세 기준 (${cal.calibratedModes.length}/${_calibratableModes.length} 측정됨)',
+                style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+              ),
+              children: [
+                Text(
+                  '각 모드에서 오버레이의 "🎯 측정" 버튼을 눌러 평상시 자세를 등록하세요.\n'
+                  '등록된 모드에선 그 자세 기준으로 거북목을 판정합니다.',
+                  style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                ),
+                const SizedBox(height: 6),
+                for (final m in _calibratableModes) _modeRow(cal, m),
+                if (cal.calibratedModes.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton.icon(
+                      onPressed: () => cal.resetAll(),
+                      icon: const Icon(Icons.delete_outline, size: 14),
+                      label: const Text('전체 초기화',
+                          style: TextStyle(fontSize: 11)),
+                      style: TextButton.styleFrom(
+                        foregroundColor: Colors.grey[600],
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
         );
       },
     );
@@ -292,167 +228,6 @@ class _ProfileTabState extends State<ProfileTab> {
     );
   }
 
-  Widget _headphoneCard() {
-    final tracker = widget.headphoneTracker!;
-    return AnimatedBuilder(
-      animation: tracker,
-      builder: (context, _) {
-        final s = tracker.state;
-        final isTracking = s.status == HeadphoneTrackerStatus.tracking;
-        final isUnsupported = s.status == HeadphoneTrackerStatus.earphoneUnsupported;
-        return Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: Colors.amber.withValues(alpha: 0.4)),
-            boxShadow: [BoxShadow(
-                color: Colors.black.withValues(alpha: 0.04), blurRadius: 6)],
-          ),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Row(children: [
-              const Text('🎧', style: TextStyle(fontSize: 16)),
-              const SizedBox(width: 6),
-              const Text('이어폰 헤드 트래커',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-              const SizedBox(width: 6),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: Colors.amber.withValues(alpha: 0.2),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: const Text('실험',
-                    style: TextStyle(
-                      fontSize: 9,
-                      color: Color(0xFF8B6914),
-                      fontWeight: FontWeight.w700)),
-              ),
-            ]),
-            const SizedBox(height: 4),
-            Text(
-              '대부분의 이어폰은 헤드 트래커 데이터를 제공하지 않습니다.\n본인 기기 지원 확인용입니다.',
-              style: TextStyle(fontSize: 11, color: Colors.grey[600])),
-            const SizedBox(height: 10),
-            _kv('연결',
-                s.deviceName ?? '이어폰 미연결'),
-            _kv('상태', _statusLabel(s.status)),
-            if (isTracking && s.pitchDeg != null)
-              _kv('머리 pitch', '${s.pitchDeg!.toStringAsFixed(1)}°'),
-            if (s.lastEventAt != null)
-              _kv('마지막 이벤트',
-                  '${DateTime.now().difference(s.lastEventAt!).inSeconds}s 전'),
-            if (isUnsupported) ...[
-              const SizedBox(height: 6),
-              Row(children: [
-                const Icon(Icons.info_outline, size: 14, color: Colors.grey),
-                const SizedBox(width: 4),
-                Expanded(child: Text(
-                  '이 이어폰은 헤드 트래커 데이터를 외부 앱에 공개하지 않습니다.',
-                  style: TextStyle(fontSize: 11, color: Colors.grey[500]))),
-              ]),
-            ],
-          ]),
-        );
-      },
-    );
-  }
-
-  String _statusLabel(HeadphoneTrackerStatus st) => switch (st) {
-    HeadphoneTrackerStatus.tracking            => '✅ tracking',
-    HeadphoneTrackerStatus.earphoneUnsupported => '❌ 지원 안 됨',
-    HeadphoneTrackerStatus.noEarphone          => '— 이어폰 미연결',
-    HeadphoneTrackerStatus.unknown             => '⏳ 초기화 중',
-  };
-
-  Widget _contextDebugCard() {
-    final det = widget.contextDetector!;
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.blueGrey.withValues(alpha: 0.3)),
-        boxShadow: [BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04), blurRadius: 6)],
-      ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Row(children: [
-          Icon(Icons.bug_report_rounded, color: Colors.blueGrey, size: 18),
-          SizedBox(width: 6),
-          Text('컨텍스트 상태 (디버그)',
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-        ]),
-        const SizedBox(height: 4),
-        Text('포그라운드 앱이 제대로 감지되는지 확인할 수 있어요.',
-            style: TextStyle(fontSize: 11, color: Colors.grey[500])),
-        const SizedBox(height: 12),
-
-        // 권한 상태 줄
-        Row(children: [
-          Icon(_usageStatsGranted ? Icons.check_circle : Icons.error_outline,
-              color: _usageStatsGranted ? kGreen : Colors.orange, size: 16),
-          const SizedBox(width: 6),
-          Expanded(
-            child: Text('사용 정보 접근 ${_usageStatsGranted ? "허용됨" : "필요"}',
-                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-          ),
-          if (!_usageStatsGranted)
-            TextButton(
-              onPressed: () async {
-                await det.foregroundAppChannel.openSettings();
-                // 사용자가 돌아온 뒤 재확인
-                await Future.delayed(const Duration(milliseconds: 500));
-                await _refreshUsageStatsPermission();
-              },
-              child: const Text('설정 열기'),
-            ),
-        ]),
-        const Divider(height: 18),
-
-        // 실시간 상태 — ContextDetector.snapshot 구독
-        ValueListenableBuilder<ContextSnapshot>(
-          valueListenable: det.snapshot,
-          builder: (context, snap, _) {
-            final pitch = snap.context.pitchThreshold;
-            final pitchStr = pitch.isFinite ? '${pitch.toStringAsFixed(0)}°' : '감지 끔';
-            return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              _kv('현재 앱',  snap.foregroundLabel ?? '—'),
-              _kv('패키지',  snap.foregroundPackage ?? '—', mono: true),
-              _kv('분류',    snap.appCategory.name),
-              _kv('컨텍스트', snap.context.label),
-              _kv('pitch 임계', pitchStr),
-              const Divider(height: 14),
-              _kv('화면',    snap.screenOn ? 'ON' : 'OFF'),
-              _kv('통화',    snap.inCall ? '통화 중' : '아님'),
-              _kv('자세',    snap.sensorPosture.label),
-              _kv('위험 가중치', '×${snap.context.riskWeight}'),
-            ]);
-          },
-        ),
-      ]),
-    );
-  }
-
-  Widget _kv(String k, String v, {bool mono = false}) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        SizedBox(width: 78, child: Text(k,
-            style: TextStyle(fontSize: 12, color: Colors.grey[600]))),
-        Expanded(
-          child: Text(v,
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                fontFamily: mono ? 'monospace' : null,
-              ),
-              overflow: TextOverflow.ellipsis),
-        ),
-      ]),
-    );
-  }
-
   Widget _overlayCard() {
     return Container(
       padding: const EdgeInsets.all(16),
@@ -498,85 +273,134 @@ class _ProfileTabState extends State<ProfileTab> {
     );
   }
 
-  Widget _serverIpCard() {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: kGreen.withValues(alpha: 0.4)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04), blurRadius: 6,
-          ),
-        ],
-      ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          const Icon(Icons.wifi_rounded, color: kGreen, size: 18),
-          const SizedBox(width: 6),
-          const Text('서버 IP 설정',
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-          const Spacer(),
-          Text('포트: $kServerPort',
-              style: TextStyle(fontSize: 11, color: Colors.grey[500])),
-        ]),
-        const SizedBox(height: 4),
-        Text('PC와 같은 WiFi에 연결 후 PC의 IP를 입력하세요.',
-            style: TextStyle(fontSize: 11, color: Colors.grey[500])),
-        const SizedBox(height: 10),
-        Row(children: [
-          Expanded(
-            child: TextField(
-              controller: _ipCtrl,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              decoration: InputDecoration(
-                hintText: '예: 192.168.0.10',
-                hintStyle: TextStyle(color: Colors.grey[400], fontSize: 13),
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                  borderSide: BorderSide(color: Colors.grey[300]!),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                  borderSide: const BorderSide(color: kGreen),
-                ),
+  /// 하단 ListTile 형 알람 설정 — 탭하면 진동/소리 토글 펼침
+  Widget _alarmExpandable() {
+    final s = AlertSettings.instance;
+    return AnimatedBuilder(
+      animation: s,
+      builder: (context, _) {
+        return Container(
+          margin: const EdgeInsets.only(bottom: 0),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(14),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.04), blurRadius: 6,
               ),
-            ),
+            ],
           ),
-          const SizedBox(width: 10),
-          ElevatedButton(
-            onPressed: () {
-              widget.onServerIpChanged?.call(_ipCtrl.text.trim());
-              FocusScope.of(context).unfocus();
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text('${_ipCtrl.text.trim()}:$kServerPort 에 연결 중...'),
-                  backgroundColor: kGreen,
-                  duration: const Duration(seconds: 2),
+          child: Theme(
+            data: Theme.of(context).copyWith(
+              dividerColor: Colors.transparent,
+            ),
+            child: ExpansionTile(
+              tilePadding: const EdgeInsets.symmetric(horizontal: 16),
+              childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              leading: const Icon(Icons.notifications_active_rounded, color: kGreen),
+              title: const Text('알람 설정', style: TextStyle(fontSize: 14)),
+              subtitle: Text(
+                _alarmSubtitle(s.vibration, s.sound),
+                style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+              ),
+              children: [
+                Text(
+                  '주의/위험 자세가 감지되면 진동이나 소리로 알려드립니다.',
+                  style: TextStyle(fontSize: 11, color: Colors.grey[600]),
                 ),
-              );
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: kGreen,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10)),
-              elevation: 0,
+                SwitchListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('진동 알림', style: TextStyle(fontSize: 13)),
+                  subtitle: const Text('주의 단계 진입 시 폰 진동',
+                      style: TextStyle(fontSize: 11)),
+                  value: s.vibration,
+                  onChanged: s.setVibration,
+                  activeThumbColor: kGreen,
+                ),
+                _levelSlider(
+                  label: '진동 세기',
+                  value: s.vibrationLevel,
+                  enabled: s.vibration,
+                  onChanged: s.setVibrationLevel,
+                  onChangeEnd: (_) => s.previewVibration(),
+                ),
+                SwitchListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('소리 알림', style: TextStyle(fontSize: 13)),
+                  subtitle: const Text('시스템 알림음 재생',
+                      style: TextStyle(fontSize: 11)),
+                  value: s.sound,
+                  onChanged: s.setSound,
+                  activeThumbColor: kGreen,
+                ),
+                _levelSlider(
+                  label: '소리 크기',
+                  value: s.soundLevel,
+                  enabled: s.sound,
+                  onChanged: s.setSoundLevel,
+                  onChangeEnd: (_) => s.previewSound(),
+                ),
+              ],
             ),
-            child: const Text('연결'),
           ),
-        ]),
+        );
+      },
+    );
+  }
+
+  Widget _levelSlider({
+    required String label,
+    required double value,
+    required bool enabled,
+    required ValueChanged<double> onChanged,
+    required ValueChanged<double> onChangeEnd,
+  }) {
+    final color = enabled ? kGreen : Colors.grey;
+    return Padding(
+      padding: const EdgeInsets.only(left: 12, right: 4, bottom: 4),
+      child: Row(children: [
+        SizedBox(
+          width: 60,
+          child: Text(label,
+              style: TextStyle(fontSize: 11, color: Colors.grey[600])),
+        ),
+        Expanded(
+          child: SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              trackHeight: 3,
+              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
+            ),
+            child: Slider(
+              value: value,
+              activeColor: color,
+              inactiveColor: Colors.grey[300],
+              onChanged: enabled ? onChanged : null,
+              onChangeEnd: enabled ? onChangeEnd : null,
+            ),
+          ),
+        ),
+        SizedBox(
+          width: 32,
+          child: Text('${(value * 100).round()}',
+              textAlign: TextAlign.end,
+              style: TextStyle(fontSize: 11, color: Colors.grey[600])),
+        ),
       ]),
     );
   }
 
-  Widget _statCard(String label, String value) {
+  String _alarmSubtitle(bool vib, bool snd) {
+    if (vib && snd) return '진동·소리 모두 켜짐';
+    if (vib) return '진동만 켜짐';
+    if (snd) return '소리만 켜짐';
+    return '모두 꺼짐';
+  }
+
+  Widget _plainListTile(String label, IconData icon, {bool enabled = true}) {
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 16),
+      margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(14),
@@ -586,25 +410,16 @@ class _ProfileTabState extends State<ProfileTab> {
           ),
         ],
       ),
-      child: Column(children: [
-        Text(value,
-            style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
-        const SizedBox(height: 4),
-        Text(label, style: TextStyle(fontSize: 11, color: Colors.grey[500])),
-      ]),
+      child: ListTile(
+        leading: Icon(icon, color: enabled ? kGreen : Colors.grey[400]),
+        title: Text(label,
+            style: TextStyle(color: enabled ? null : Colors.grey[500])),
+        trailing: Icon(Icons.chevron_right,
+            color: enabled ? Colors.grey : Colors.grey[300]),
+        enabled: enabled,
+        onTap: enabled ? () {} : null,
+      ),
     );
   }
 
-  static const _settings = [
-    _SettingItem('알림 설정', Icons.notifications_outlined),
-    _SettingItem('측정 설정', Icons.tune_rounded),
-    _SettingItem('도움말',    Icons.help_outline_rounded),
-    _SettingItem('앱 정보',   Icons.info_outline_rounded),
-  ];
-}
-
-class _SettingItem {
-  final String   label;
-  final IconData icon;
-  const _SettingItem(this.label, this.icon);
 }

@@ -1,302 +1,81 @@
+import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import '../constants.dart';
-import '../models/posture_state.dart';
-import '../models/posture_snapshot.dart';
-import '../painters/arc_gauge_painter.dart';
+import '../models/app_usage_record.dart';
+import '../services/app_category_classifier.dart';
+import '../services/usage_tracker_service.dart';
 
 class ReportTab extends StatefulWidget {
-  final PostureState          data;
-  final List<PostureSnapshot> snapshots;
-  final int                   todayScore;
-
-  const ReportTab({
-    super.key,
-    required this.data,
-    required this.snapshots,
-    required this.todayScore,
-  });
+  const ReportTab({super.key});
 
   @override
   State<ReportTab> createState() => _ReportTabState();
 }
 
 class _ReportTabState extends State<ReportTab> {
-  bool _weeklyView  = false;
-  bool _monthlyComp = false;
+  UsagePeriod _period = UsagePeriod.today;
+  final Set<AppCategory> _expanded = {};
 
-  double get _avgPitchDeg {
-    if (widget.snapshots.isEmpty) return 0;
-    return widget.snapshots.map((s) => s.pitchDeg).reduce((a, b) => a + b) /
-        widget.snapshots.length;
+  @override
+  void initState() {
+    super.initState();
+    UsageTrackerService.instance.addListener(_onChange);
   }
 
-  double get _currentPitchDeg =>
-      (1.0 - (widget.data.scores['pitch'] ?? 1.0)) * 20.0;
-
-  int get _prevScore {
-    if (widget.snapshots.length < 2) return 0;
-    final half = widget.snapshots.sublist(0, widget.snapshots.length ~/ 2);
-    return (half.map((s) => s.score).reduce((a, b) => a + b) / half.length)
-        .round();
+  @override
+  void dispose() {
+    UsageTrackerService.instance.removeListener(_onChange);
+    super.dispose();
   }
 
-  int get _scoreDiff => widget.todayScore - _prevScore;
-
-  String get _motivationalText {
-    final s = widget.todayScore;
-    if (s == 0) return '측정 데이터가 없습니다. 잠시 후 자동으로 측정됩니다.';
-    if (s > 90) return '완벽합니다! 상위 5%에 해당하는 자세 점수입니다.';
-    if (s > 75) return '훌륭합니다! 상위 15%에 해당하는 자세 점수입니다.';
-    if (s > 60) return '평균입니다. 꾸준한 자세 관리가 필요합니다.';
-    if (s > 40) return '주의가 필요합니다. 자세 교정을 권장합니다.';
-    return '위험합니다! 즉각적인 스트레칭이 필요합니다.';
-  }
-
-  String get _pitchAdvice {
-    final deg = _avgPitchDeg;
-    if (deg < 10) return '목 각도 양호 — 현재 자세를 유지하세요.';
-    if (deg < 20) return '목이 약간 앞으로 기울어져 있습니다. 스트레칭 필요.';
-    return '목 각도 위험 수준! 즉각적인 자세 교정이 필요합니다.';
+  void _onChange() {
+    if (mounted) setState(() {});
   }
 
   @override
   Widget build(BuildContext context) {
-    final score = widget.todayScore;
-    final ratio = score / 100.0;
-    final curr  = _currentPitchDeg;
-    final avg   = _avgPitchDeg;
-    final diff  = _scoreDiff;
-    final prev  = _prevScore;
-    final improved = diff >= 0;
-
-    final currColor = curr > 15 ? Colors.red : curr > 8 ? Colors.orange : kGreen;
-    final avgColor  = avg  > 15 ? Colors.red : avg  > 8 ? Colors.blue   : kGreen;
+    final agg = UsageTrackerService.instance.aggregate(_period);
+    final isEmpty = agg.totalSeconds == 0 && agg.totalWarnings == 0;
 
     return SafeArea(
       child: CustomScrollView(
         slivers: [
-          // ── 헤더 ──────────────────────────────────────────────────
           SliverToBoxAdapter(
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Text('자세 분석 리포트',
-                      style: TextStyle(
-                          fontSize: 20, fontWeight: FontWeight.bold)),
-                  Text('${widget.snapshots.length}회 측정',
-                      style: TextStyle(
-                          fontSize: 12, color: Colors.grey[500])),
+                  const Text('앱 사용·자세 리포트',
+                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                  Text('주의 ${agg.totalWarnings}회',
+                      style: TextStyle(fontSize: 12, color: Colors.grey[500])),
                 ],
               ),
             ),
           ),
-
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: _periodToggle(),
+            ),
+          ),
           SliverPadding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
             sliver: SliverList(
               delegate: SliverChildListDelegate([
-
-                // ── 카드 1: 점수 게이지 ──────────────────────────────
-                _card(
-                  title: '오늘의 자세 건강 점수',
-                  subtitle: 'DAILY HEALTH SCORE',
-                  child: Column(children: [
-                    const SizedBox(height: 8),
-                    SizedBox(
-                      width: 160, height: 160,
-                      child: CustomPaint(
-                        painter: ArcGaugePainter(
-                          ratio: ratio, strokeWidth: 16,
-                          color: kGreen,
-                          trackColor: const Color(0xFFE8F8F3),
-                        ),
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Text('$score',
-                                style: const TextStyle(
-                                    fontSize: 44,
-                                    fontWeight: FontWeight.bold)),
-                            const Text('POINTS',
-                                style: TextStyle(
-                                    fontSize: 11,
-                                    color: Colors.grey,
-                                    letterSpacing: 2)),
-                          ],
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Text(_motivationalText,
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                            fontSize: 13, color: Colors.grey[600])),
-                    const SizedBox(height: 12),
-                  ]),
-                ),
-                const SizedBox(height: 12),
-
-                // ── 카드 2: 목 각도 분석 ─────────────────────────────
-                _card(
-                  title: '목 각도 분석',
-                  subtitle: 'NECK ANGLE',
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    child: Column(children: [
-                      // 거북목 기준 설명
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(12),
-                        margin: const EdgeInsets.only(bottom: 16),
-                        decoration: BoxDecoration(
-                          color: Colors.orange.withValues(alpha: 0.08),
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(
-                              color: Colors.orange.withValues(alpha: 0.3)),
-                        ),
-                        child: const Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text('거북목 기준',
-                                style: TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 12)),
-                            SizedBox(height: 6),
-                            _AngleRow(label: '0° ~ 8°',  desc: '정상',  color: kGreen),
-                            _AngleRow(label: '8° ~ 15°', desc: '주의',  color: Colors.orange),
-                            _AngleRow(label: '15° 이상', desc: '거북목', color: Colors.red),
-                          ],
-                        ),
-                      ),
-                      // 현재 / 평균
-                      Row(children: [
-                        Expanded(child: _metricBox(
-                          '현재 목 각도',
-                          '${curr.toStringAsFixed(1)}°',
-                          'Forward',
-                          currColor,
-                        )),
-                        const SizedBox(width: 12),
-                        Expanded(child: _metricBox(
-                          '하루 평균 각도',
-                          '${avg.toStringAsFixed(1)}°',
-                          'Average',
-                          avgColor,
-                        )),
-                      ]),
-                      const SizedBox(height: 12),
-                      // 각도 게이지 바
-                      _angleBar(curr, '현재', currColor),
-                      const SizedBox(height: 8),
-                      _angleBar(avg,  '평균', avgColor),
-                      const SizedBox(height: 12),
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: currColor.withValues(alpha: 0.08),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: Text(_pitchAdvice,
-                            style: TextStyle(
-                                fontSize: 12, color: Colors.grey[700])),
-                      ),
-                    ]),
-                  ),
-                ),
-                const SizedBox(height: 12),
-
-                // ── 카드 3: 시간대별 변화 ────────────────────────────
-                _card(
-                  title: '시간대별 자세 변화',
-                  subtitle: 'TIMELINE TREND',
-                  trailing: _toggleRow(
-                    ['일별', '주별'], _weeklyView ? 1 : 0,
-                    (i) => setState(() => _weeklyView = i == 1),
-                  ),
-                  child: SizedBox(
-                    height: 160,
-                    child: widget.snapshots.length < 2
-                        ? Center(
-                            child: Text('측정 데이터 수집 중...',
-                                style: TextStyle(color: Colors.grey[400])))
-                        : CustomPaint(
-                            painter: _TimelinePainter(
-                                snapshots: widget.snapshots),
-                          ),
-                  ),
-                ),
-                const SizedBox(height: 12),
-
-                // ── 카드 4: 이전 대비 개선도 ─────────────────────────
-                _card(
-                  title: '이전 대비 개선도',
-                  subtitle: 'PROGRESS COMPARISON',
-                  trailing: _toggleRow(
-                    ['주간', '월간'], _monthlyComp ? 1 : 0,
-                    (i) => setState(() => _monthlyComp = i == 1),
-                  ),
-                  child: prev == 0
-                      ? Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 20),
-                          child: Center(
-                              child: Text('비교할 데이터가 부족합니다.',
-                                  style: TextStyle(color: Colors.grey[400]))),
-                        )
-                      : Column(children: [
-                          const SizedBox(height: 8),
-                          SizedBox(
-                            height: 120,
-                            child: CustomPaint(
-                              painter: _BarChartPainter(
-                                  prevScore: prev,
-                                  currScore: widget.todayScore),
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          Row(children: [
-                            Icon(
-                              improved
-                                  ? Icons.arrow_upward_rounded
-                                  : Icons.arrow_downward_rounded,
-                              color: improved ? kGreen : Colors.red,
-                              size: 16,
-                            ),
-                            const SizedBox(width: 4),
-                            Text(
-                              '${improved ? '+' : ''}$diff점 ${improved ? '상승' : '하락'}',
-                              style: TextStyle(
-                                color: improved ? kGreen : Colors.red,
-                                fontWeight: FontWeight.bold,
-                                fontSize: 13,
-                              ),
-                            ),
-                            const Spacer(),
-                            Text('달성 목표 관리 중',
-                                style: TextStyle(
-                                    fontSize: 11,
-                                    color: Colors.grey[500])),
-                          ]),
-                          const SizedBox(height: 8),
-                        ]),
-                ),
-
-                // ── 카드 5: 세부 지표 ─────────────────────────────────
-                const SizedBox(height: 12),
-                _card(
-                  title: '세부 지표',
-                  subtitle: 'SUB SCORES',
-                  child: Column(children: [
-                    _subBar('머리 피치',   widget.data.scores['pitch'] ?? 1.0),
-                    _subBar('눈-어깨 비율', widget.data.scores['eye']   ?? 1.0),
-                    _subBar('귀 가시성',   widget.data.scores['vis']   ?? 1.0),
-                    _subBar('Z축 보조',    widget.data.scores['z']     ?? 1.0,
-                        last: true),
-                  ]),
-                ),
-
+                if (isEmpty)
+                  _emptyState()
+                else ...[
+                  _summaryCard(agg),
+                  const SizedBox(height: 12),
+                  _periodChartCard(),
+                  const SizedBox(height: 12),
+                  for (final c in agg.categories) ...[
+                    _categoryCard(c, agg.totalWarnings, agg.totalSeconds),
+                    const SizedBox(height: 10),
+                  ],
+                ],
               ]),
             ),
           ),
@@ -305,13 +84,653 @@ class _ReportTabState extends State<ReportTab> {
     );
   }
 
-  // ── 공통 카드 컨테이너 ──────────────────────────────────────────
-  Widget _card({
-    required String title,
-    required String subtitle,
-    required Widget child,
-    Widget? trailing,
+  Widget _periodToggle() {
+    Widget btn(UsagePeriod p, String label) {
+      final sel = _period == p;
+      return Expanded(
+        child: GestureDetector(
+          onTap: () => setState(() => _period = p),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            margin: const EdgeInsets.all(3),
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            decoration: BoxDecoration(
+              color: sel ? kGreen : Colors.transparent,
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Center(
+              child: Text(label,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: sel ? Colors.white : Colors.grey[600],
+                    fontWeight: sel ? FontWeight.w700 : FontWeight.normal,
+                  )),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.grey[100],
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Row(children: [
+        btn(UsagePeriod.today, '오늘'),
+        btn(UsagePeriod.week, '주간'),
+        btn(UsagePeriod.month, '월간'),
+      ]),
+    );
+  }
+
+  Widget _emptyState() {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 60, horizontal: 24),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Column(children: [
+        Icon(Icons.insights_rounded, size: 48, color: Colors.grey[300]),
+        const SizedBox(height: 12),
+        Text('아직 데이터가 없습니다',
+            style: TextStyle(fontSize: 14, color: Colors.grey[600], fontWeight: FontWeight.w600)),
+        const SizedBox(height: 6),
+        Text(
+          '앱 사용 기록과 자세 주의 횟수가 수집되면\n여기에 카테고리별로 표시됩니다.',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 12, color: Colors.grey[500], height: 1.4),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          '※ 사용량 추적은 PACKAGE_USAGE_STATS 권한이 필요합니다.\n프로필 탭에서 허용 후 잠시 기다려주세요.',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 11, color: Colors.grey[400], height: 1.4),
+        ),
+      ]),
+    );
+  }
+
+  Widget _summaryCard(UsageAggregate agg) {
+    final ratePerHour = agg.totalSeconds == 0
+        ? 0.0
+        : agg.totalWarnings / (agg.totalSeconds / 3600.0);
+    return _card(
+      title: '요약',
+      subtitle: 'SUMMARY',
+      child: Row(children: [
+        Expanded(child: _summaryBox('총 사용시간', _formatDuration(agg.totalSeconds), kGreen)),
+        const SizedBox(width: 10),
+        Expanded(child: _summaryBox('총 주의', '${agg.totalWarnings}회', Colors.orange)),
+        const SizedBox(width: 10),
+        Expanded(child: _summaryBox('시간당 주의', '${ratePerHour.toStringAsFixed(1)}회', Colors.red)),
+      ]),
+    );
+  }
+
+  Widget _summaryBox(String label, String value, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(children: [
+        Text(value,
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: color)),
+        const SizedBox(height: 4),
+        Text(label, style: TextStyle(fontSize: 10, color: Colors.grey[600])),
+      ]),
+    );
+  }
+
+  Widget _periodChartCard() {
+    final title = switch (_period) {
+      UsagePeriod.today => '카테고리별 사용 비율',
+      UsagePeriod.week => '요일별 사용량 (주의·경고 표시)',
+      UsagePeriod.month => '카테고리별 일별 주의 추이',
+    };
+    final subtitle = switch (_period) {
+      UsagePeriod.today => 'CATEGORY SHARE',
+      UsagePeriod.week => 'WEEKLY USAGE',
+      UsagePeriod.month => 'MONTHLY TREND',
+    };
+    Widget chart;
+    switch (_period) {
+      case UsagePeriod.today:
+        chart = _todayDonut();
+      case UsagePeriod.week:
+        chart = _weekStackedBar();
+      case UsagePeriod.month:
+        chart = _monthLineChart();
+    }
+    return _card(
+      title: title,
+      subtitle: subtitle,
+      child: SizedBox(height: 200, child: chart),
+    );
+  }
+
+  Widget _todayDonut() {
+    final usage = UsageTrackerService.instance.categoryUsageToday();
+    final entries = _chartCategories
+        .map((c) => MapEntry(c, usage[c] ?? 0))
+        .where((e) => e.value > 0)
+        .toList();
+    final total = entries.fold<int>(0, (s, e) => s + e.value);
+    if (total == 0) {
+      return Center(
+        child: Text('오늘 사용 기록이 없어요.',
+            style: TextStyle(color: Colors.grey[400])),
+      );
+    }
+    final sections = entries.map((e) {
+      final pct = e.value * 100.0 / total;
+      return PieChartSectionData(
+        color: _categoryColor(e.key),
+        value: e.value.toDouble(),
+        title: '${_categoryEmoji(e.key)} ${pct.toStringAsFixed(0)}%',
+        titleStyle: const TextStyle(
+          color: Colors.white, fontSize: 11, fontWeight: FontWeight.w700,
+        ),
+        radius: 50,
+      );
+    }).toList();
+    return Row(children: [
+      Expanded(
+        child: PieChart(
+          PieChartData(
+            sections: sections,
+            sectionsSpace: 2,
+            centerSpaceRadius: 38,
+            startDegreeOffset: -90,
+            centerSpaceColor: Colors.white,
+          ),
+        ),
+      ),
+      const SizedBox(width: 8),
+      Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('총 사용', style: TextStyle(fontSize: 10, color: Colors.grey[500])),
+          Text(_formatDuration(total),
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 8),
+          for (final e in entries) Padding(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: Row(children: [
+              Container(
+                width: 8, height: 8,
+                decoration: BoxDecoration(
+                  color: _categoryColor(e.key), shape: BoxShape.circle,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Text(_categoryLabel(e.key),
+                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+              const SizedBox(width: 6),
+              Text(_formatDuration(e.value),
+                  style: TextStyle(fontSize: 10, color: Colors.grey[500])),
+            ]),
+          ),
+        ],
+      ),
+      const SizedBox(width: 4),
+    ]);
+  }
+
+  Widget _weekStackedBar() {
+    final data = UsageTrackerService.instance.dailyByCategoryThisWeek();
+    const dayLabels = ['월', '화', '수', '목', '금', '토', '일'];
+    // 분 단위로 변환 (y축 가독성)
+    final groups = <BarChartGroupData>[];
+    double maxMinutes = 0;
+    for (int i = 0; i < 7; i++) {
+      double cumulative = 0;
+      final stacks = <BarChartRodStackItem>[];
+      for (final c in _chartCategories) {
+        final secs = data.usageSeconds[c]?[i] ?? 0;
+        if (secs <= 0) continue;
+        final minutes = secs / 60.0;
+        stacks.add(BarChartRodStackItem(
+          cumulative, cumulative + minutes, _categoryColor(c),
+        ));
+        cumulative += minutes;
+      }
+      if (cumulative > maxMinutes) maxMinutes = cumulative;
+      groups.add(BarChartGroupData(
+        x: i,
+        barRods: [
+          BarChartRodData(
+            toY: cumulative,
+            width: 22,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(4)),
+            rodStackItems: stacks,
+            color: stacks.isEmpty ? Colors.grey.shade200 : null,
+          ),
+        ],
+      ));
+    }
+    if (maxMinutes <= 0) {
+      return Center(
+        child: Text('이번 주 사용 기록이 없어요.',
+            style: TextStyle(color: Colors.grey[400])),
+      );
+    }
+    final maxY = (maxMinutes * 1.15).ceilToDouble();
+
+    return LayoutBuilder(builder: (context, constraints) {
+      final w = constraints.maxWidth;
+      final h = constraints.maxHeight;
+      // BarChart 내부 패딩(타이틀 라벨 공간) 추정 — leftAxis 32, bottom 22, top 8
+      const leftAxis = 32.0;
+      const bottomAxis = 22.0;
+      const topPad = 8.0;
+      final plotW = w - leftAxis;
+      final plotH = h - bottomAxis - topPad;
+      final groupW = plotW / 7;
+
+      // 주의+경고 합계 — 막대 위 텍스트
+      final dayTotals = List<int>.generate(7, (i) {
+        int s = 0;
+        for (final c in _chartCategories) {
+          s += data.warnings[c]?[i] ?? 0;
+        }
+        return s;
+      });
+
+      return Stack(children: [
+        BarChart(
+          BarChartData(
+            maxY: maxY,
+            barGroups: groups,
+            gridData: FlGridData(
+              show: true,
+              drawVerticalLine: false,
+              horizontalInterval: maxY / 4,
+              getDrawingHorizontalLine: (_) =>
+                  FlLine(color: Colors.grey.shade200, strokeWidth: 1),
+            ),
+            borderData: FlBorderData(show: false),
+            titlesData: FlTitlesData(
+              topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+              rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+              leftTitles: AxisTitles(
+                sideTitles: SideTitles(
+                  showTitles: true,
+                  reservedSize: leftAxis,
+                  interval: maxY / 4,
+                  getTitlesWidget: (v, _) => Padding(
+                    padding: const EdgeInsets.only(right: 4),
+                    child: Text('${v.toInt()}m',
+                        style: TextStyle(fontSize: 9, color: Colors.grey[500])),
+                  ),
+                ),
+              ),
+              bottomTitles: AxisTitles(
+                sideTitles: SideTitles(
+                  showTitles: true,
+                  reservedSize: bottomAxis,
+                  getTitlesWidget: (v, _) {
+                    final i = v.toInt();
+                    if (i < 0 || i > 6) return const SizedBox.shrink();
+                    final isToday = i == data.lastIndex;
+                    return Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        dayLabels[i],
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: isToday ? kGreen : Colors.grey[600],
+                          fontWeight: isToday ? FontWeight.bold : FontWeight.normal,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+            barTouchData: BarTouchData(enabled: false),
+          ),
+        ),
+        // 스택 영역 위에 주의+경고 횟수 오버레이
+        ..._buildWeekOverlayLabels(
+          data: data,
+          totals: dayTotals,
+          maxY: maxY,
+          plotW: plotW,
+          plotH: plotH,
+          leftAxis: leftAxis,
+          topPad: topPad,
+          groupW: groupW,
+        ),
+      ]);
+    });
+  }
+
+  List<Widget> _buildWeekOverlayLabels({
+    required ({
+      Map<AppCategory, List<int>> usageSeconds,
+      Map<AppCategory, List<int>> warnings,
+      int lastIndex,
+    }) data,
+    required List<int> totals,
+    required double maxY,
+    required double plotW,
+    required double plotH,
+    required double leftAxis,
+    required double topPad,
+    required double groupW,
   }) {
+    final widgets = <Widget>[];
+    for (int i = 0; i < 7; i++) {
+      final cx = leftAxis + groupW * (i + 0.5);
+      double cumulative = 0;
+      for (final c in _chartCategories) {
+        final secs = data.usageSeconds[c]?[i] ?? 0;
+        if (secs <= 0) continue;
+        final minutes = secs / 60.0;
+        final segTop = topPad + plotH * (1 - (cumulative + minutes) / maxY);
+        final segBottom = topPad + plotH * (1 - cumulative / maxY);
+        final segH = segBottom - segTop;
+        final warn = data.warnings[c]?[i] ?? 0;
+        if (segH >= 18 && warn > 0) {
+          widgets.add(Positioned(
+            left: cx - 18,
+            top: segTop + segH / 2 - 7,
+            child: SizedBox(
+              width: 36,
+              child: Text(
+                '$warn',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ));
+        }
+        cumulative += minutes;
+      }
+      // 막대 위 총합
+      if (totals[i] > 0) {
+        final topY = topPad + plotH * (1 - cumulative / maxY);
+        widgets.add(Positioned(
+          left: cx - 24,
+          top: (topY - 14).clamp(0.0, plotH),
+          child: SizedBox(
+            width: 48,
+            child: Text(
+              '총 ${totals[i]}회',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.grey[700],
+                fontSize: 9,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ));
+      }
+    }
+    return widgets;
+  }
+
+  Widget _monthLineChart() {
+    final data = UsageTrackerService.instance.dailyByCategoryThisMonth();
+    // 데이터 있는 카테고리만 라인 생성
+    final lines = <LineChartBarData>[];
+    int maxV = 0;
+    for (final c in _chartCategories) {
+      final list = data.warnings[c]!;
+      // 데이터 있는 날들의 (x, y) 만 모음 → 라인 끊김
+      final spots = <FlSpot>[];
+      for (int i = 0; i <= data.lastIndex; i++) {
+        if (!data.dayHasData[i]) {
+          // 끊김: 현재 spot 누적 끊기 위해 라인을 분리하려면 separate line 필요.
+          // 여기선 다음 데이터-있는 날까지 건너뛰며 누적.
+          continue;
+        }
+        final v = list[i];
+        if (v > maxV) maxV = v;
+        spots.add(FlSpot(i.toDouble(), v.toDouble()));
+      }
+      if (spots.isEmpty) continue;
+      lines.add(LineChartBarData(
+        spots: spots,
+        isCurved: false,
+        color: _categoryColor(c),
+        barWidth: 2,
+        isStrokeCapRound: true,
+        dotData: FlDotData(
+          show: true,
+          getDotPainter: (s, _, _, _) => FlDotCirclePainter(
+            radius: 2,
+            color: _categoryColor(c),
+            strokeWidth: 0,
+          ),
+        ),
+      ));
+    }
+    if (lines.isEmpty) {
+      return Center(
+        child: Text('최근 30일 데이터가 없어요.',
+            style: TextStyle(color: Colors.grey[400])),
+      );
+    }
+    if (maxV < 4) maxV = 4;
+
+    return Column(children: [
+      Expanded(
+        child: LineChart(
+          LineChartData(
+            minX: 0, maxX: 29,
+            minY: 0, maxY: maxV.toDouble(),
+            lineBarsData: lines,
+            gridData: FlGridData(
+              show: true,
+              drawVerticalLine: false,
+              horizontalInterval: (maxV / 4).clamp(1, double.infinity).toDouble(),
+              getDrawingHorizontalLine: (_) =>
+                  FlLine(color: Colors.grey.shade200, strokeWidth: 1),
+            ),
+            borderData: FlBorderData(show: false),
+            titlesData: FlTitlesData(
+              topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+              rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+              leftTitles: AxisTitles(
+                sideTitles: SideTitles(
+                  showTitles: true,
+                  reservedSize: 28,
+                  interval: (maxV / 4).clamp(1, double.infinity).toDouble(),
+                  getTitlesWidget: (v, _) => Padding(
+                    padding: const EdgeInsets.only(right: 4),
+                    child: Text('${v.toInt()}',
+                        style: TextStyle(fontSize: 9, color: Colors.grey[500])),
+                  ),
+                ),
+              ),
+              bottomTitles: AxisTitles(
+                sideTitles: SideTitles(
+                  showTitles: true,
+                  reservedSize: 22,
+                  interval: 7,
+                  getTitlesWidget: (v, _) {
+                    final i = v.toInt();
+                    if (i < 0 || i > 29) return const SizedBox.shrink();
+                    final d = DateTime.now().subtract(Duration(days: 29 - i));
+                    return Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text('${d.month}/${d.day}',
+                          style: TextStyle(fontSize: 9, color: Colors.grey[500])),
+                    );
+                  },
+                ),
+              ),
+            ),
+            lineTouchData: const LineTouchData(enabled: false),
+          ),
+        ),
+      ),
+      const SizedBox(height: 4),
+      Wrap(spacing: 10, runSpacing: 4, children: [
+        for (final c in _chartCategories)
+          Row(mainAxisSize: MainAxisSize.min, children: [
+            Container(
+              width: 8, height: 8,
+              decoration: BoxDecoration(
+                color: _categoryColor(c), shape: BoxShape.circle,
+              ),
+            ),
+            const SizedBox(width: 4),
+            Text('${_categoryEmoji(c)} ${_categoryLabel(c)}',
+                style: TextStyle(fontSize: 10, color: Colors.grey[700])),
+          ]),
+      ]),
+    ]);
+  }
+
+  // 차트에 표시할 4 카테고리 (other 제외)
+  static const _chartCategories = [
+    AppCategory.video,
+    AppCategory.game,
+    AppCategory.social,
+    AppCategory.study,
+  ];
+
+  Widget _categoryCard(CategoryAggregate cat, int totalWarn, int totalSec) {
+    final expanded = _expanded.contains(cat.category);
+    final warnPct = totalWarn == 0 ? 0 : (cat.totalWarnings * 100 / totalWarn).round();
+    final timePct = totalSec == 0 ? 0 : (cat.totalSeconds * 100 / totalSec).round();
+    final color = _categoryColor(cat.category);
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 6, offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(children: [
+        InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: () => setState(() {
+            if (expanded) {
+              _expanded.remove(cat.category);
+            } else {
+              _expanded.add(cat.category);
+            }
+          }),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
+            child: Row(children: [
+              Container(
+                width: 40, height: 40,
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                alignment: Alignment.center,
+                child: Text(_categoryEmoji(cat.category),
+                    style: const TextStyle(fontSize: 20)),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(_categoryLabel(cat.category),
+                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 2),
+                  Text(
+                    '${_formatDuration(cat.totalSeconds)} · 주의 ${cat.totalWarnings}회 ($warnPct%)',
+                    style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                  ),
+                  const SizedBox(height: 6),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(3),
+                    child: LinearProgressIndicator(
+                      value: (timePct / 100).clamp(0.0, 1.0),
+                      minHeight: 5,
+                      backgroundColor: Colors.grey[200],
+                      valueColor: AlwaysStoppedAnimation<Color>(color),
+                    ),
+                  ),
+                ]),
+              ),
+              const SizedBox(width: 8),
+              AnimatedRotation(
+                duration: const Duration(milliseconds: 200),
+                turns: expanded ? 0.5 : 0,
+                child: Icon(Icons.expand_more_rounded, color: Colors.grey[500]),
+              ),
+            ]),
+          ),
+        ),
+        AnimatedSize(
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeInOut,
+          child: expanded
+              ? Padding(
+                  padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+                  child: Column(children: [
+                    Divider(color: Colors.grey[200], height: 1),
+                    const SizedBox(height: 8),
+                    for (final app in cat.apps) _appRow(app, cat.totalWarnings, color),
+                  ]),
+                )
+              : const SizedBox.shrink(),
+        ),
+      ]),
+    );
+  }
+
+  Widget _appRow(AppUsageRecord app, int catTotalWarn, Color color) {
+    final ratio = catTotalWarn == 0 ? 0 : (app.warningCount * 100 / catTotalWarn).round();
+    final label = app.label.isEmpty ? app.packageName : app.label;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(children: [
+        Container(
+          width: 6, height: 6,
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Text(_formatDuration(app.usageSeconds),
+            style: TextStyle(fontSize: 11, color: Colors.grey[600])),
+        const SizedBox(width: 12),
+        SizedBox(
+          width: 70,
+          child: Text(
+            '주의 ${app.warningCount}회 ($ratio%)',
+            textAlign: TextAlign.right,
+            style: TextStyle(
+              fontSize: 11,
+              color: app.warningCount > 0 ? Colors.orange[800] : Colors.grey[400],
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+      ]),
+    );
+  }
+
+  Widget _card({required String title, required String subtitle, required Widget child}) {
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
@@ -325,296 +744,52 @@ class _ReportTabState extends State<ReportTab> {
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 14, 12, 4),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(title, style: const TextStyle(
-                      fontSize: 14, fontWeight: FontWeight.bold)),
-                  Text(subtitle, style: TextStyle(
-                      fontSize: 10, color: Colors.grey[400],
-                      letterSpacing: 0.5)),
-                ],
-              )),
-              ?trailing,
-            ],
-          ),
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(title, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+            Text(subtitle,
+                style: TextStyle(fontSize: 10, color: Colors.grey[400], letterSpacing: 0.5)),
+          ]),
         ),
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          padding: const EdgeInsets.fromLTRB(16, 6, 16, 16),
           child: child,
         ),
       ]),
     );
   }
-
-  Widget _metricBox(String label, String value, String sub, Color color) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(children: [
-        Text(value, style: TextStyle(
-            fontSize: 26, fontWeight: FontWeight.bold, color: color)),
-        Text(sub, style: TextStyle(fontSize: 11, color: color)),
-        const SizedBox(height: 4),
-        Text(label, style: TextStyle(
-            fontSize: 11, color: Colors.grey[600])),
-      ]),
-    );
-  }
-
-  Widget _angleBar(double deg, String label, Color color) {
-    const maxDeg = 30.0;
-    final ratio = (deg / maxDeg).clamp(0.0, 1.0);
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-        Text(label, style: TextStyle(fontSize: 11, color: Colors.grey[500])),
-        Text('${deg.toStringAsFixed(1)}°',
-            style: TextStyle(
-                fontSize: 11, fontWeight: FontWeight.bold, color: color)),
-      ]),
-      const SizedBox(height: 4),
-      // LinearProgressIndicator 사용 - Stack/FractionallySizedBox 충돌 방지
-      ClipRRect(
-        borderRadius: BorderRadius.circular(4),
-        child: LinearProgressIndicator(
-          value: ratio,
-          minHeight: 8,
-          backgroundColor: Colors.grey[200],
-          valueColor: AlwaysStoppedAnimation<Color>(color),
-        ),
-      ),
-      // 거북목 기준선 표시 (15° = 50%)
-      LayoutBuilder(builder: (ctx, constraints) {
-        final markerX = constraints.maxWidth * (15 / maxDeg);
-        return SizedBox(
-          height: 12,
-          child: Stack(children: [
-            Positioned(
-              left: markerX - 1,
-              child: Container(
-                width: 2, height: 12,
-                color: Colors.orange.withValues(alpha: 0.6),
-              ),
-            ),
-            Positioned(
-              left: markerX + 4,
-              child: Text('15°',
-                  style: TextStyle(fontSize: 9, color: Colors.orange[700])),
-            ),
-          ]),
-        );
-      }),
-    ]);
-  }
-
-  Widget _subBar(String label, double value, {bool last = false}) {
-    final col = value > 0.65 ? kGreen
-        : value > 0.40 ? Colors.orange : Colors.red;
-    return Padding(
-      padding: EdgeInsets.only(bottom: last ? 0 : 14),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-          Text(label, style: const TextStyle(fontSize: 13)),
-          Text('${(value * 100).clamp(0, 100).toInt()}',
-              style: TextStyle(fontWeight: FontWeight.bold, color: col)),
-        ]),
-        const SizedBox(height: 6),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(6),
-          child: LinearProgressIndicator(
-            value: value.clamp(0.0, 1.0),
-            minHeight: 8,
-            backgroundColor: Colors.grey[200],
-            valueColor: AlwaysStoppedAnimation<Color>(col),
-          ),
-        ),
-      ]),
-    );
-  }
-
-  Widget _toggleRow(List<String> labels, int selected,
-      void Function(int) onSelect) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.grey[100],
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        for (int i = 0; i < labels.length; i++)
-          GestureDetector(
-            onTap: () => onSelect(i),
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 150),
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              decoration: BoxDecoration(
-                color: i == selected ? kGreen : Colors.transparent,
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Text(labels[i], style: TextStyle(
-                fontSize: 11,
-                color: i == selected ? Colors.white : Colors.grey,
-                fontWeight: i == selected
-                    ? FontWeight.w700 : FontWeight.normal,
-              )),
-            ),
-          ),
-      ]),
-    );
-  }
 }
 
-// ── 각도 기준 행 ──────────────────────────────────────────────────
-class _AngleRow extends StatelessWidget {
-  final String label;
-  final String desc;
-  final Color  color;
-
-  const _AngleRow({
-    required this.label,
-    required this.desc,
-    required this.color,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(top: 4),
-      child: Row(children: [
-        Container(
-          width: 10, height: 10,
-          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-        ),
-        const SizedBox(width: 8),
-        Text(label,
-            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500)),
-        const SizedBox(width: 8),
-        Text('→ $desc',
-            style: TextStyle(fontSize: 12, color: color,
-                fontWeight: FontWeight.bold)),
-      ]),
-    );
-  }
+String _formatDuration(int seconds) {
+  if (seconds < 60) return '${seconds}s';
+  final m = seconds ~/ 60;
+  if (m < 60) return '${m}m';
+  final h = m ~/ 60;
+  final mm = m % 60;
+  return mm == 0 ? '${h}h' : '${h}h ${mm}m';
 }
 
-// ── 타임라인 그래프 ───────────────────────────────────────────────
-class _TimelinePainter extends CustomPainter {
-  final List<PostureSnapshot> snapshots;
-  const _TimelinePainter({required this.snapshots});
+String _categoryEmoji(AppCategory c) => switch (c) {
+      AppCategory.video => '📺',
+      AppCategory.game => '🎮',
+      AppCategory.social => '💬',
+      AppCategory.study => '📚',
+      AppCategory.other => '📦',
+    };
 
-  @override
-  void paint(Canvas canvas, Size size) {
-    if (snapshots.length < 2) return;
-    const pad = 24.0;
-    final w = size.width - pad;
-    final h = size.height - pad - 16;
-    final n = snapshots.length;
-    final scores = snapshots.map((s) => s.score.toDouble()).toList();
-    final minS = scores.reduce((a, b) => a < b ? a : b);
-    final maxS = scores.reduce((a, b) => a > b ? a : b);
-    final range = (maxS - minS).clamp(10.0, 100.0);
+String _categoryLabel(AppCategory c) => switch (c) {
+      AppCategory.video => '영상',
+      AppCategory.game => '게임',
+      AppCategory.social => 'SNS',
+      AppCategory.study => '학습/업무',
+      AppCategory.other => '기타',
+    };
 
-    double xOf(int i) => pad + (i / (n - 1)) * w;
-    double yOf(int i) => 8 + h * (1 - (scores[i] - minS) / range);
+Color _categoryColor(AppCategory c) => switch (c) {
+      AppCategory.video => const Color(0xFFE53935),
+      AppCategory.game => const Color(0xFF8E24AA),
+      AppCategory.social => const Color(0xFF1E88E5),
+      AppCategory.study => const Color(0xFF00897B),
+      AppCategory.other => const Color(0xFF757575),
+    };
 
-    // 면적
-    final fill = Path()
-      ..moveTo(xOf(0), size.height - 16)
-      ..lineTo(xOf(0), yOf(0));
-    for (int i = 1; i < n; i++) { fill.lineTo(xOf(i), yOf(i)); }
-    fill..lineTo(xOf(n - 1), size.height - 16)..close();
-    canvas.drawPath(fill,
-        Paint()..color = kGreen.withValues(alpha: 0.12)
-               ..style = PaintingStyle.fill);
-
-    // 선
-    final line = Path()..moveTo(xOf(0), yOf(0));
-    for (int i = 1; i < n; i++) { line.lineTo(xOf(i), yOf(i)); }
-    canvas.drawPath(line,
-        Paint()..color = kGreen..strokeWidth = 2
-               ..style = PaintingStyle.stroke
-               ..strokeCap = StrokeCap.round
-               ..strokeJoin = StrokeJoin.round);
-
-    final tp = TextPainter(textDirection: TextDirection.ltr);
-
-    for (int i = 0; i < n; i++) {
-      canvas.drawCircle(Offset(xOf(i), yOf(i)), 4,
-          Paint()..color = kGreen..style = PaintingStyle.fill);
-
-      // 점수
-      tp.text = TextSpan(text: '${scores[i].toInt()}',
-          style: const TextStyle(fontSize: 9, color: kGreen,
-              fontWeight: FontWeight.bold));
-      tp.layout();
-      tp.paint(canvas, Offset(xOf(i) - tp.width / 2, yOf(i) - 16));
-
-      // 시간
-      if (i == 0 || i == n - 1 || (n <= 5) || i % ((n - 1) ~/ 3 + 1) == 0) {
-        final t = snapshots[i].time;
-        tp.text = TextSpan(
-            text: '${t.hour.toString().padLeft(2,'0')}:'
-                  '${t.minute.toString().padLeft(2,'0')}',
-            style: TextStyle(fontSize: 9, color: Colors.grey[400]));
-        tp.layout();
-        tp.paint(canvas,
-            Offset(xOf(i) - tp.width / 2, size.height - 14));
-      }
-    }
-  }
-
-  @override
-  bool shouldRepaint(_TimelinePainter old) =>
-      old.snapshots.length != snapshots.length;
-}
-
-// ── 바 차트 ───────────────────────────────────────────────────────
-class _BarChartPainter extends CustomPainter {
-  final int prevScore;
-  final int currScore;
-  const _BarChartPainter({required this.prevScore, required this.currScore});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    const labelH = 24.0;
-    final maxH   = size.height - labelH * 2;
-    final barW   = size.width * 0.28;
-    final gap    = (size.width - barW * 2) / 3;
-    final maxVal = [prevScore, currScore, 1].reduce((a, b) => a > b ? a : b);
-
-    void drawBar(double x, int s, Color col, String lbl) {
-      final barH = maxH * (s / maxVal);
-      final top  = maxH - barH + labelH;
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(
-            Rect.fromLTWH(x, top, barW, barH), const Radius.circular(6)),
-        Paint()..color = col,
-      );
-      final tp = TextPainter(textDirection: TextDirection.ltr);
-      tp.text = TextSpan(text: '$s',
-          style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold,
-              color: col));
-      tp.layout();
-      tp.paint(canvas, Offset(x + barW / 2 - tp.width / 2, top - 20));
-
-      tp.text = TextSpan(text: lbl,
-          style: TextStyle(fontSize: 11, color: Colors.grey[500]));
-      tp.layout();
-      tp.paint(canvas, Offset(x + barW / 2 - tp.width / 2,
-          size.height - labelH + 4));
-    }
-
-    drawBar(gap,            prevScore, Colors.grey[300]!, '이전');
-    drawBar(gap * 2 + barW, currScore, kGreen,           '현재');
-  }
-
-  @override
-  bool shouldRepaint(_BarChartPainter old) =>
-      old.prevScore != prevScore || old.currScore != currScore;
-}
