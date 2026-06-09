@@ -5,7 +5,10 @@ class AppUsageRecord {
   String label;
   AppCategory category;
   int usageSeconds;
+  /// 주의·경고 합산 횟수. 하위호환 위해 이름 유지.
   int warningCount;
+  /// 경고(risk)만 별도 누적. 주의는 (warningCount - riskCount) 로 계산.
+  int riskCount;
 
   AppUsageRecord({
     required this.packageName,
@@ -13,7 +16,11 @@ class AppUsageRecord {
     required this.category,
     this.usageSeconds = 0,
     this.warningCount = 0,
+    this.riskCount = 0,
   });
+
+  /// 순수 주의 횟수 (경고 제외).
+  int get cautionCount => warningCount - riskCount;
 
   Map<String, dynamic> toJson() => {
         'pkg': packageName,
@@ -21,6 +28,7 @@ class AppUsageRecord {
         'cat': category.name,
         'sec': usageSeconds,
         'warn': warningCount,
+        'risk': riskCount,
       };
 
   static AppUsageRecord fromJson(Map<String, dynamic> m) => AppUsageRecord(
@@ -29,6 +37,7 @@ class AppUsageRecord {
         category: _catFromName(m['cat'] as String? ?? 'other'),
         usageSeconds: (m['sec'] as num?)?.toInt() ?? 0,
         warningCount: (m['warn'] as num?)?.toInt() ?? 0,
+        riskCount: (m['risk'] as num?)?.toInt() ?? 0,
       );
 }
 

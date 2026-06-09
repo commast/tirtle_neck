@@ -6,6 +6,7 @@
 
 거북목·자세 불량을 감지해 사용자에게 알리는 모바일/데스크톱 앱.
 IMU 센서 기반 위험도(정상/주의/위험) 3단계 + 포그라운드 앱 컨텍스트 감지를 결합한다.
+앱별 사용시간/주의 횟수를 누적해 리포트로 시각화한다.
 
 | 항목 | 내용 |
 |---|---|
@@ -13,7 +14,9 @@ IMU 센서 기반 위험도(정상/주의/위험) 3단계 + 포그라운드 앱 
 | 백엔드 | Python FastAPI + MediaPipe (선택적, 카메라 분석) |
 | 온디바이스 분석 | Android Kotlin MediaPipe (기본 모드) |
 | 네이티브 | Android Kotlin (오버레이, 포그라운드 서비스, UsageStats, 전화 상태) |
-| 상태관리 | StatefulWidget + setState + ValueNotifier |
+| 상태관리 | StatefulWidget + setState + ValueNotifier + ChangeNotifier 싱글톤 |
+| 차트 | fl_chart (도넛/스택바/라인) |
+| 알람 | flutter_ringtone_player (시스템 알림음) + HapticFeedback (진동) |
 
 ---
 
@@ -31,7 +34,8 @@ tirtle_ml/
 │   │   ├── posture_snapshot.dart             # 캡처 히스토리 항목
 │   │   ├── sensor_posture.dart               # TFLite 출력 5분류 enum
 │   │   ├── detected_context.dart             # 7가지 사용 컨텍스트 enum + 색/임계
-│   │   └── neck_risk.dart                    # NeckRiskLevel(정상/주의/위험) + 점수 분해
+│   │   ├── neck_risk.dart                    # NeckRiskLevel(정상/주의/위험) + 점수 분해
+│   │   └── app_usage_record.dart             # 앱별/카테고리별 일일 누적 (리포트 데이터)
 │   ├── services/
 │   │   ├── sensor_classifier.dart            # IMU → 자세 분류 + 위험도 계산 (핵심)
 │   │   ├── context_detector.dart             # 포그라운드앱+폰상태 → DetectedContext
@@ -39,18 +43,23 @@ tirtle_ml/
 │   │   ├── phone_state_channel.dart          # 네이티브 화면·통화 채널 래퍼
 │   │   ├── app_category_classifier.dart      # 패키지명/시스템 카테고리 → AppCategory
 │   │   ├── camera_mode_settings.dart         # 게임·영상 모드 카메라 옵트인 (SharedPrefs)
+│   │   ├── alert_settings.dart               # 진동/소리 ON-OFF + 세기 (싱글톤 ChangeNotifier)
+│   │   ├── usage_tracker_service.dart        # 포그라운드 앱 사용시간/주의횟수 누적 (싱글톤)
+│   │   ├── posture_calibration.dart          # 모드별 baseline tilt 저장/로드
+│   │   ├── background_calibration_runner.dart# 5초 백그라운드 캘리브레이션 샘플러
 │   │   ├── overlay_channel.dart              # 분할 오버레이 (모드 칩 + 위험 칩)
 │   │   ├── native_camera_channel.dart        # Kotlin Camera2 캡처 채널
-│   │   └── pose_analyzer_channel.dart        # 온디바이스 MediaPipe 분석 채널
+│   │   ├── pose_analyzer_channel.dart        # 온디바이스 MediaPipe 분석 채널
+│   │   └── headphone_head_tracker.dart       # (UI 제거됨, 파일만 잔존)
 │   ├── painters/
 │   │   ├── arc_gauge_painter.dart
 │   │   └── area_line_painter.dart
 │   └── screens/
-│       ├── main_screen.dart                  # 중추 — 위험도·컨텍스트·캡처·오버레이 통합
-│       ├── home_tab.dart
-│       ├── report_tab.dart
-│       ├── camera_tab.dart
-│       └── profile_tab.dart                  # 카메라 옵트인 설정 + 디버그 카드
+│       ├── main_screen.dart                  # 중추 — 위험도·컨텍스트·캡처·오버레이·알람사이클
+│       ├── home_tab.dart                     # 톱 사용 앱 카드 + 카테고리 라인 차트
+│       ├── report_tab.dart                   # 오늘 도넛 / 주간 스택바 / 월간 라인 (fl_chart)
+│       ├── camera_tab.dart                   # 캡처 히스토리 (FAB 경로 없어졌고 거의 미사용)
+│       └── profile_tab.dart                  # 오버레이/카메라 옵트인/측정설정·알람 ExpansionTile
 └── android/app/src/main/
     ├── kotlin/com/example/tirtle_ml/
     │   ├── MainActivity.kt                   # MethodChannel·EventChannel 등록
@@ -107,11 +116,24 @@ tirtle_ml/
          ↓ (매 컨텍스트 변경 시)
    SensorClassifier.updateContext(ctx) — pitch 임계/가중치 갱신
 
-┌─ MainScreen  통합 + UI ──────────────────────────────────┐
+┌─ UsageTrackerService  앱별 사용량 누적 ──────────────────┐
+│   ContextDetector.snapshot 구독 → 앱 전환 시 이전 앱에   │
+│   초 단위 누적. 알람 발사 시 warningCount + hourly 버킷. │
+│   SharedPrefs 'usage_history_v1' 에 일자별 JSON 영속화.  │
+│   리포트 탭이 이 데이터를 도넛/스택바/라인으로 시각화.   │
+└──────────────────────────────────────────────────────────┘
+
+┌─ MainScreen  통합 + UI + 알람 듀티 사이클 ───────────────┐
 │                                                          │
 │   onRiskChanged ─→ _updateOverlay()                       │
 │     OverlayChannel.updateSplit(mode, risk, score?)       │
 │        → Kotlin OverlayService 두 칩 갱신                │
+│     ※ _shouldShowOverlay==false 면 오버레이 stop+알람차단│
+│                                                          │
+│   normal → caution/risk ─→ _fireAlertIfDue()              │
+│     ├─ AlertSettings.triggerAlert (진동+소리)            │
+│     ├─ UsageTrackerService.recordWarning()               │
+│     └─ alerting(3s) → cooldown(10s) → 재평가 사이클       │
 │                                                          │
 │   risk=위험 5초 지속 ─→ _onSustainedRiskDetected()        │
 │     ├─ 컨텍스트가 gaming/watchingVideo ? 카메라 발사     │
@@ -170,15 +192,19 @@ if (gaming || watchingVideo) {
 
 7가지. 우선순위 체인 위 → 아래.
 
-| 컨텍스트 | 신호 | pitch 임계 | 모드 색 | 라벨 |
-|---|---|---|---|---|
-| `onPhoneCall` | TelephonyManager.callState ≠ IDLE | 비활성 | #795548 | 통화 중 |
-| `watchingVideo` | 포그라운드 = CATEGORY_VIDEO | 22° | #9C27B0 보라 | 영상 모드 |
-| `gaming` | 포그라운드 = CATEGORY_GAME | 22° | #2196F3 파랑 | 게임 모드 |
-| `social` | 포그라운드 = CATEGORY_SOCIAL | 22° | #03A9F4 하늘 | 소셜 모드 |
-| `studying` | 포그라운드 = CATEGORY_PRODUCTIVITY | 25° | #4CAF50 초록 | 학습 모드 |
-| `desk` | SensorPosture.desk + 위 모두 무관 | 22° | #607D8B 회청 | 책상 모드 |
-| `normal` | 그 외 | 30° | #9E9E9E 회색 | (오버레이 숨김) |
+| 컨텍스트 | 신호 | pitch 임계 | 모드 색 | 라벨 | 오버레이 |
+|---|---|---|---|---|---|
+| `onPhoneCall` | TelephonyManager.callState ≠ IDLE | 비활성 | #795548 | 통화 중 | **숨김** |
+| `watchingVideo` | 포그라운드 = CATEGORY_VIDEO | 22° | #9C27B0 보라 | 영상 모드 | 표시 |
+| `gaming` | 포그라운드 = CATEGORY_GAME | 22° | #2196F3 파랑 | 게임 모드 | 표시 |
+| `social` | 포그라운드 = CATEGORY_SOCIAL | 22° | #03A9F4 하늘 | 소셜 모드 | 표시 |
+| `studying` | 포그라운드 = CATEGORY_PRODUCTIVITY | 25° | #4CAF50 초록 | 학습 모드 | 표시 |
+| `desk` | SensorPosture.desk + 위 모두 무관 | 22° | #607D8B 회청 | 책상 모드 | **숨김** |
+| `normal` | 그 외 (런처/일반 앱) | 30° | #9E9E9E 회색 | 대기 | **숨김** |
+
+### 오버레이 가시성 정책
+
+`MainScreen._shouldShowOverlay` getter — 컨텍스트가 **video / game / social / study** 중 하나일 때만 오버레이를 표시하고 알람을 발사한다. 그 외(런처, 분류 안 된 앱, 통화 중, 책상 모드)에서는 `OverlayChannel.stop()` 호출 + 진행 중 알람 사이클 취소.
 
 ### 포그라운드 앱 식별 (Android 11+ 주의)
 
@@ -211,11 +237,32 @@ if (gaming || watchingVideo) {
 ```
 
 - 위험 레벨이 `normal`이면 오른쪽 칩 `View.GONE`
-- 모드가 `normal`이면 왼쪽 칩 "대기" 회색
-- API: `OverlayChannel.updateSplit({mode, risk, score?})`
+- 컨텍스트가 video/game/social/study **이외**면 오버레이 전체 hide
+- 알람 쿨다운 중에는 risk 칩을 일시적으로 normal 로 마스킹
+- API: `OverlayChannel.updateSplit({mode, risk, score?})`, `OverlayChannel.start()/stop()`
 
 ---
 
+## 7. 알람 듀티 사이클
+
+[main_screen.dart](lib/screens/main_screen.dart) — `_AlertPhase` {idle, alerting, cooldown}.
+
+```
+[idle]  센서 normal→non-normal + _shouldShowOverlay
+   ↓ 알람 1회 (소리+진동) + UsageTrackerService.recordWarning()
+[alerting]  3초 (오버레이 실제 risk 칩 표시)
+   ↓
+[cooldown]  10초 (오버레이 정상 칩 마스킹, 소리/진동 무음)
+   ↓ 만료 시 현재 _riskState 확인
+   ├─ non-normal → [alerting] 재진입 (재알람)
+   └─ normal     → [idle]
+```
+
+- 자세를 바로잡아 normal 복귀해도 쿨다운은 끝까지 유지.
+- `_stopSensorMonitoring()` / `dispose()` 에서 타이머 정리.
+- 알람 자체 ON/OFF, 진동/소리 세기는 `AlertSettings` 싱글톤 (SharedPrefs 영속).
+
+---
 
 ## 8. 네이티브 → Flutter 채널 맵
 
@@ -228,6 +275,8 @@ if (gaming || watchingVideo) {
 | `…/foreground_app` | MethodChannel | Flutter→Kotlin | UsageStats 권한 체크/설정 열기 |
 | `…/foreground_app_events` | EventChannel | Kotlin→Flutter | 포그라운드 앱 변경 스트림 |
 | `…/phone_state_events` | EventChannel | Kotlin→Flutter | 화면 ON/OFF + 통화 상태 스트림 |
+
+⚠️ `ForegroundAppChannel.stream` 의 `EventChannel.receiveBroadcastStream()` 은 Android에서 **활성 핸들러 1개만** 허용. `ContextDetector` 가 단독 구독하고 `UsageTrackerService` 는 그 `snapshot` ValueNotifier 를 구독해야 충돌 안 남.
 
 ---
 
@@ -244,6 +293,7 @@ if (gaming || watchingVideo) {
 <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
 <uses-permission android:name="android.permission.WAKE_LOCK"/>
 <uses-permission android:name="android.permission.READ_PHONE_STATE"/>
+<uses-permission android:name="android.permission.VIBRATE"/>
 <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
     tools:ignore="ProtectedPermissions"/>
 ```
@@ -254,7 +304,7 @@ if (gaming || watchingVideo) {
 |---|---|---|
 | `READ_PHONE_STATE` | `Permission.phone.request()` | 앱 시작 (initState) |
 | `CAMERA` | `Permission.camera.request()` | 사용자가 카메라 탭에서 수동 시작 시만 |
-| `PACKAGE_USAGE_STATS` | **보호된 권한 — 시스템 설정으로 안내** | 프로필 탭 "설정 열기" 버튼 |
+| `PACKAGE_USAGE_STATS` | **보호된 권한 — 시스템 설정으로 안내** | 미허용 시 사용량 추적 안 됨 |
 | `SYSTEM_ALERT_WINDOW` | 오버레이 시작 시도 시 시스템 다이얼로그 | 사용자가 오버레이 시작 시 |
 
 ---
@@ -269,7 +319,9 @@ wakelock_plus: ^1.3.4
 flutter_foreground_task: ^8.0.2
 sensors_plus: ^6.1.0
 tflite_flutter: ^0.11.0
-shared_preferences: ^2.5.5      # 카메라 모드 옵트인 저장
+shared_preferences: ^2.5.5      # 카메라 옵트인/캘리브레이션/사용량/알람 설정 저장
+fl_chart: ^0.69.0               # 리포트 도넛/스택바/라인 차트
+flutter_ringtone_player: ^4.0.0+3  # 안드로이드 시스템 알림음 (SystemSound.alert 가 no-op)
 ```
 
 `flutter_overlay_window`, `flutter_activity_recognition`은 사용 안 함 (네이티브로 대체 / 제거됨).
@@ -287,30 +339,57 @@ dependencies {
 
 ---
 
-## 11. 디버그 / 검증
+## 11. 화면 구성
 
-### ProfileTab 컨텍스트 디버그 카드
+### HomeTab
+- 인사 + 앱 이름 (상태 인디케이터 제거됨)
+- **오늘 가장 많이 쓴 앱 카드** (앱명, 카테고리 칩, 사용시간, 주의·위험 총횟수, 시간당 발생률)
+- **카테고리별 경고·위험 추이 라인 차트** — 일별(24h) / 주별(월~일) 토글, 4 카테고리 색별 라인
+- 데이터 없는 미래 시각은 라인 미연결
 
-실시간으로 보이는 항목:
-- 사용 정보 접근 권한 상태 + "설정 열기" 버튼
-- 현재 포그라운드 앱 이름 + 패키지명 + 분류 카테고리
-- 현재 컨텍스트 + pitch 임계 + 위험 가중치
-- 화면 ON/OFF, 통화 여부, 자세 (TFLite)
+### ReportTab — 오늘/주간/월간 토글
+- 오늘: **도넛 차트** (4 카테고리 사용시간 비율, 사용 안 한 카테고리는 슬라이스 없음)
+- 주간: **스택 막대** (월~일 7개, 각 막대를 4 카테고리 사용시간 비율로 스택, 영역 안에 주의·경고 횟수 텍스트)
+- 월간: **4 라인 차트** (카테고리별 일별 주의 추이, 데이터 없는 날 끊김)
+- 하단: 카테고리 카드 Expandable 리스트 (앱별 사용시간/주의횟수 드릴다운)
+- fl_chart 사용
 
-### Logcat 주요 태그
+### ProfileTab
+- 아바타 + 사용자 + 이메일 (장식)
+- 자세 오버레이 시작 카드 (SYSTEM_ALERT_WINDOW 허용)
+- 모드별 카메라 사용 옵트인 카드 (게임/영상)
+- 하단 ListTile:
+  - **알람 설정** (ExpansionTile) — 진동/소리 토글 + 각 세기 슬라이더
+  - **측정 설정** (ExpansionTile) — 모드별 자세 기준 (캘리브레이션), `(N/5 측정됨)` 부제목
+  - 도움말 / 앱 정보 — 비활성 placeholder
+
+### CameraTab
+- 캡처 히스토리. FAB 변경으로 진입 경로 없어졌고 거의 미사용.
+
+### FAB — 센서 토글
+- 가운데 FloatingActionButton (centerDocked)
+- 아이콘: `sensors_rounded` (꺼짐, 초록) / `sensors_off_rounded` (켜짐, 빨강)
+- 탭 → `_toggleSensor()` 로 SensorClassifier + 포그라운드 서비스 + 오버레이 토글
+- 앱 시작 시 OFF (사용자가 명시적으로 켜야 감지 시작)
+
+---
+
+## 12. Logcat 주요 태그
 
 ```
 [Risk] 정상/주의/위험 점수=… (pitch=, gyro=, dur=, still보너스=, …)
 [Sensor] 컨텍스트 → (모드)  (pitch임계=…°)
 [Context] 포그라운드: (앱이름) (패키지명) sys=(카테고리) → (분류)
 [TFLite] (자세)  N=0.x T=0.x D=0.x SL=0.x L=0.x
+[Alert] 알림음 재생 실패: …  (폴백 동작 시)
+[UsageTracker] FgApp/저장/로드 관련 에러
 D/FgApp: 포그라운드 앱 변경: (앱이름) (패키지명) category=(...)
 D/PhoneState: ...
 ```
 
 ---
 
-## 12. 주요 버그 수정 이력
+## 13. 주요 버그 수정 이력
 
 ### Android 14 포그라운드 서비스 크래시
 - 문제: `foregroundServiceType` 파라미터 없이 `startForeground()` 호출
@@ -322,23 +401,36 @@ D/PhoneState: ...
 
 ### UsageStatsManager 백그라운드 폴링 누락
 - 문제: `Handler(Looper.getMainLooper())`로 폴링 시 메인 스레드 throttle로 백그라운드에서 안 돌아감
-- 해결: 별도 `HandlerThread` 사용 + `queryUsageStats(INTERVAL_DAILY)` → `queryEvents()` (ACTIVITY_RESUMED 이벤트 직접 추적)
+- 해결: 별도 `HandlerThread` 사용 + `queryUsageStats(INTERVAL_DAILY)` → `queryEvents()`
 
 ### 컨텍스트 전환 시 위험 타이머 누수
-- 문제: 이전 모드 임계로 카운트 중이던 타이머가 새 모드로 넘어가 즉시 트리거
 - 해결: `SensorClassifier.updateContext()`에서 무조건 `_cancelTurtleNeckTimers()`
 
 ### 카메라 권한 다이얼로그 침입
-- 문제: 센서 트리거에서 `Permission.camera.request()`가 다른 앱 사용 중 다이얼로그 띄움
 - 해결: 센서 트리거에서는 `Permission.camera.status`만 조회, 미허용 시 조용히 스킵
 
-### 점수가 정상 상태에서도 기록되던 문제
-- 문제: 캘리브레이션 캡처(시작 직후 2회)에서도 `_snapshots.add()`
+### 캘리브레이션 캡처가 점수 히스토리에 섞임
 - 해결: `_captureOnce({fromTurtleNeck})` 플래그로 트리거 캡처만 히스토리 기록
+
+### ForegroundApp EventChannel 다중 구독 충돌
+- 문제: `UsageTrackerService` 가 `ForegroundAppChannel.stream` 을 별도 listen하면서 `ContextDetector` 의 listen을 덮어씌워 컨텍스트 갱신이 멈춤 → 오버레이/모드 칩 안 뜸
+- 해결: `UsageTrackerService.init(ContextDetector)` 가 EventChannel 직접 구독 대신 `ContextDetector.snapshot` ValueNotifier 를 구독
+
+### SystemSound.alert 가 안드로이드에서 무음
+- 문제: Flutter 공식 문서 — iOS 전용
+- 해결: `flutter_ringtone_player` 도입 → `playNotification(volume:)` 호출
+
+### 알람이 엣지 1회만 발사
+- 문제: normal→non-normal 엣지에서만 발사라 자세 계속 나빠도 재알람 없음
+- 해결: `_AlertPhase` 듀티 사이클 (3초 알람 / 10초 쿨다운 / 반복) — 섹션 7 참조
+
+### 시간대 막대 차트 색이 데이터 적을 때 모두 빨강
+- 문제: `ratio > 0.7` 휴리스틱이 한두 데이터에서 무조건 1.0이 됨
+- 해결: 막대 차트 자체를 도넛/스택바/라인으로 교체 (fl_chart), 색은 카테고리 고정색만
 
 ---
 
-## 13. 제거된 기능 (한때 있었으나 사용 안 함)
+## 14. 제거된 기능 (한때 있었으나 사용 안 함)
 
 | 기능 | 제거 이유 |
 |---|---|
@@ -348,48 +440,44 @@ D/PhoneState: ...
 | `flutter_activity_recognition` 패키지 | 위 두 컨텍스트 제거로 불필요 |
 | `ACTIVITY_RECOGNITION` 권한 | 위와 같음 |
 | `flutter_overlay_window` 패키지 | Android 14 호환 안 됨, 네이티브 OverlayService로 대체 |
+| 서버 IP 설정 카드 | 온디바이스 모드 기본화로 불필요 |
+| 이어폰 헤드 트래커 UI 카드 | 99% 기기에서 동작 안 함 (서비스 파일은 잔존, 인스턴스화 안 함) |
+| ProfileTab 컨텍스트 디버그 카드 | 사용자 노출 불필요, 개발용 — Logcat 으로 대체 |
+| ProfileTab 상단 stat 3개 (측정일/평균점수/토큰) | 더미 데이터, 의미 없음 |
+| HomeTab 연결됨/연결 중 인디케이터 | 의미가 모호해 제거 |
+| 자세 점수 게이지 / 점수 추이 라인 | 카테고리·앱 중심 리포트로 전환 |
+| FAB 카메라 탭 진입 경로 | FAB 가 센서 토글로 용도 변경 |
 
 ---
 
-## 14. 단계별 동작 예시
+## 15. 단계별 동작 예시
 
-| 시나리오 | 오버레이 표시 | 카메라 발사 |
-|---|---|---|
-| 유튜브 켰음, 자세 좋음 | `영상 모드` 보라 만 | X |
-| 유튜브 보는데 약간 숙임 1분 | `영상 모드` 보라 + `주의` 주황 | X |
-| 유튜브 3분간 안 움직임 | `영상 모드` 보라 + `위험` 빨강 | 영상 옵트인 ON일 때만 |
-| 카카오톡 사용 + 보통 자세 5분 | `소셜 모드` 하늘 + `주의` | X (소셜은 카메라 비대상) |
-| 게임 중 자세 나쁨 5초+ | `게임 모드` 파랑 + `위험` | 게임 옵트인 ON일 때만 |
-| 통화 수신 | `통화 중` 갈색 만 | X (감지 비활성) |
+| 시나리오 | 오버레이 표시 | 알람 | 카메라 발사 |
+|---|---|---|---|
+| 폰 홈 화면(런처) | 숨김 | X | X |
+| 시계/날씨 등 분류 안 된 앱 | 숨김 | X | X |
+| 통화 수신 | 숨김 | X | X |
+| 책상 모드 (폰 엎어둠) | 숨김 | X | X |
+| 유튜브, 자세 좋음 | 영상 모드 보라 | X | X |
+| 유튜브, 약간 숙임 1분 | 영상 모드 + 주의 (3초) → 마스킹(10초) → … | 진동+소리 13초 주기 | X |
+| 유튜브 3분간 안 움직임 | 영상 모드 + 위험 | 위험 사이클 | 옵트인 ON일 때만 |
+| 카카오톡 + 자세 나쁨 5분 | 소셜 모드 + 주의 | 사이클 | X (소셜은 카메라 비대상) |
+| 게임 중 자세 나쁨 5초+ | 게임 모드 + 위험 | 사이클 | 옵트인 ON일 때만 |
 
 ---
 
-## 15. 실험적 기능
+## 16. 캘리브레이션 (PostureCalibration)
 
-격리된 별도 파일에 작성된 베타 기능들. 본체 기능에 영향 주지 않는다.
-
-### 이어폰 헤드 트래커 (`Sensor.TYPE_HEAD_TRACKER`, API 33+)
-
-BT 이어폰 내장 헤드 트래커로 머리 회전 각도를 직접 측정하는 실험 기능.
-**99% 케이스에서 안 작동** (안드로이드 정책상 시스템 전용 센서) — 본인 기기 지원 여부 확인용.
-
-| 파일 | 역할 |
-|------|------|
-| `android/app/src/main/kotlin/com/example/tirtle_ml/HeadphoneHeadTracker.kt` | 네이티브 본체 |
-| `lib/services/headphone_head_tracker.dart` | Flutter 래퍼 (ChangeNotifier) |
-| `lib/screens/profile_tab.dart` `_headphoneCard()` | UI 카드 |
-| **[`docs/HEADPHONE_TRACKER.md`](docs/HEADPHONE_TRACKER.md)** | **전용 상세 문서 (구조도·상태머신·채널 프로토콜·트러블슈팅 포함)** |
-
-상세 동작·수정 방법·통합 정책 등은 위 전용 문서 참고.
-
-### 캘리브레이션 (`PostureCalibration`)
-
-첫 실행 시 5초간 "편한 자세" 측정 → SharedPreferences 저장 → 위험도 계산 시 절대 각도 대신
-**baseline 대비 편차**로 점수 매김. 사람마다 폰 잡는 자세가 달라 발생하는 오감지 줄임.
+각 모드(영상/게임/소셜/학습/책상) 별로 "평상시 자세" 의 baseline tilt 를 저장.
+이후 위험도 계산 시 절대 각도 대신 **baseline 대비 편차**로 점수 매김.
+사람마다 폰 잡는 자세가 달라 발생하는 오감지 줄임.
 
 | 파일 | 역할 |
 |------|------|
 | `lib/services/posture_calibration.dart` | baseline tilt 저장/로드 (ChangeNotifier) |
-| `lib/screens/calibration_dialog.dart` | 5초 측정 다이얼로그 |
+| `lib/services/background_calibration_runner.dart` | 5초 백그라운드 측정 샘플러 |
 | `lib/services/sensor_classifier.dart` | `_computeRisk()` 안에서 baseline 있으면 편차 기반 점수 |
-| `lib/screens/profile_tab.dart` `_calibrationCard()` | 재측정 UI |
+| `lib/screens/profile_tab.dart` `_measurementExpandable()` | 측정 설정 ExpansionTile UI |
+| `OverlayService.kt` | 오버레이에 "🎯 측정" 버튼 — 측정 가능 모드 + 미측정 시 표시 |
+
+측정 흐름: 오버레이 측정 버튼 탭 → `_handleOverlayCalibrateTapped()` → `BackgroundCalibrationRunner.sample()` (5초 카운트다운) → `PostureCalibration.saveFor(mode, tilt)`. 측정된 모드는 측정 설정 카드에 각도와 함께 표시되고 X 로 개별 초기화 가능.

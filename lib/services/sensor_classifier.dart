@@ -8,21 +8,40 @@ import '../models/detected_context.dart';
 import '../models/neck_risk.dart';
 import 'posture_calibration.dart';
 
+/// 기기 물리 회전 — 가속도 자체에서 추정한다.
+/// portrait: 세로(가로축 ay 가 중력 방향), landscape: 가로(축 ax 가 중력 방향).
+enum DeviceOrientation { portrait, landscape }
+
 class SensorClassifier {
   static const int    _windowSize       = 40;
-  static const int    _cooldownSeconds  = 10;
-  static const int    _sustainedSeconds = 5; // risk 레벨이 5초 유지되면 트리거
   static const String _modelAsset      = 'assets/posture_model.tflite';
   // 현재 tilt가 baseline에서 이만큼 벗어나면 "자세 바뀜"으로 보고 지속시간 리셋.
   static const double _poseChangeDeg   = 15.0;
   // tilt가 이 값 이상이면 "수직 자세(거의 안전)" — 지속시간 누적 안 함.
   static const double _goodPostureTilt = 60.0;
 
+  // ── 방향 감지(히스테리시스) ────────────────────────────────────────
+  // |dominant| / |other| > 비율이면 명확한 방향. 그 사이는 이전 방향 유지.
+  static const double _orientRatio          = 1.4;
+  // 폰이 거의 평평하면(중력이 z축에 몰리면) 방향 판정 보류.
+  static const double _flatGravityRatio     = 0.85;
+  // 같은 신규 방향이 N프레임 연속 감지돼야 전환 (약 0.5s @ gameInterval).
+  static const int    _orientSwitchFrames   = 10;
+
+  // ── 지속시간 점수 시스템 ──────────────────────────────────────────
+  // 누적 임계(초). 비-normal 상태가 dt 만큼 흐르면 +dt, normal 이면 -dt*배수.
+  static const double _badScoreThresholdSec = 3.0;
+  static const Duration _durationCooldown    = Duration(seconds: 45);
+  static const double _recoveryMultiplier    = 2.0;
+  // dt가 이 값보다 크면(앱 백그라운드 지연 등) 점수 업데이트 스킵.
+  static const double _maxDtSec              = 5.0;
+
   DetectedContext _currentContext = DetectedContext.normal;
 
   final void Function(SensorPosture)?  onPostureChanged;
   final void Function(NeckRiskState)?  onRiskChanged;
-  final void Function()?               onTurtleNeckDetected;
+  /// 지속시간 점수가 임계를 넘었을 때 1회 호출 (쿨다운 후 다시 가능).
+  final void Function()?               onDurationAlert;
 
   /// 개인 baseline tilt. null이면 절대 각도 기반 기본 채점.
   PostureCalibration? calibration;
@@ -33,9 +52,6 @@ class SensorClassifier {
   List<double>             _lastGyr = [0, 0, 0];
   StreamSubscription<AccelerometerEvent>? _accSub;
   StreamSubscription<GyroscopeEvent>?     _gyrSub;
-  DateTime?    _lastTriggerTime;
-  Timer?       _turtleNeckTimer;
-  Timer?       _graceTimer;
   SensorPosture _currentPosture = SensorPosture.normal;
   NeckRiskLevel _currentRiskLevel = NeckRiskLevel.normal;
   DateTime?     _poseStartTime;       // 같은 자세 지속 시작 시각
@@ -46,27 +62,32 @@ class SensorClassifier {
   String        _modelError     = '';
   int           _frameCount     = 0;
 
+  // ── 방향 감지 상태 ──────────────────────────────────────────────
+  DeviceOrientation _orientation        = DeviceOrientation.portrait;
+  DeviceOrientation _pendingOrientation = DeviceOrientation.portrait;
+  int               _orientationStreak  = 0;
+
+  // ── 지속시간 점수 상태 ──────────────────────────────────────────
+  double    _badScoreSec        = 0.0;
+  DateTime? _lastDurationAlertAt;
+  DateTime? _lastScoreUpdate;
+
   SensorClassifier({
     this.onPostureChanged,
     this.onRiskChanged,
-    this.onTurtleNeckDetected,
+    this.onDurationAlert,
     this.calibration,
   });
+
+  DeviceOrientation get currentOrientation => _orientation;
 
   void updateContext(DetectedContext ctx) {
     if (_currentContext == ctx) return;
     _currentContext = ctx;
     debugPrint('[Sensor] 컨텍스트 → ${ctx.label}  (pitch임계=${ctx.pitchThreshold}°)');
-    // 컨텍스트 전환 시 항상 타이머 리셋: 이전 임계로 시작된 카운트가
-    // 새 임계 컨텍스트로 넘어가 자세 전환 도중 오발동하는 것 방지.
-    _cancelTurtleNeckTimers();
-  }
-
-  void _cancelTurtleNeckTimers() {
-    _turtleNeckTimer?.cancel();
-    _turtleNeckTimer = null;
-    _graceTimer?.cancel();
-    _graceTimer = null;
+    // 컨텍스트 전환 시 지속시간 점수도 초기화 — 이전 컨텍스트 누적이 새 모드로 새지 않게.
+    _badScoreSec = 0.0;
+    _lastScoreUpdate = null;
   }
 
   /// IMU 센서 기반 거북목 위험도 계산.
@@ -82,6 +103,7 @@ class SensorClassifier {
     final ax = _window.map((f) => f[0]).reduce((a, b) => a + b) / _window.length;
     final ay = _window.map((f) => f[1]).reduce((a, b) => a + b) / _window.length;
     final az = _window.map((f) => f[2]).reduce((a, b) => a + b) / _window.length;
+
     final tiltDeg = atan2(ay.abs(), sqrt(ax * ax + az * az)) * 180 / pi;
 
     // ── pitch 점수: baseline이 있으면 편차 기반, 없으면 절대 각도 기반 ──
@@ -221,38 +243,7 @@ class SensorClassifier {
           'w=${st.modeWeight})');
     }
     onRiskChanged?.call(st);
-
-    // 위험 단계가 5초 유지되면 카메라 트리거 후보로 발사.
-    // 실제 카메라 발사 여부는 main_screen에서 컨텍스트 + 사용자 설정으로 게이팅.
-    if (st.level == NeckRiskLevel.risk) {
-      _graceTimer?.cancel();
-      _graceTimer = null;
-      _turtleNeckTimer ??= Timer(
-        Duration(seconds: _sustainedSeconds),
-        _onSustainedRisk,
-      );
-    } else {
-      if (_turtleNeckTimer != null && _graceTimer == null) {
-        _graceTimer = Timer(const Duration(seconds: 1), () {
-          _turtleNeckTimer?.cancel();
-          _turtleNeckTimer = null;
-          _graceTimer = null;
-        });
-      }
-    }
-  }
-
-  void _onSustainedRisk() {
-    _turtleNeckTimer = null;
-    final now = DateTime.now();
-    if (_lastTriggerTime != null &&
-        now.difference(_lastTriggerTime!) <
-            const Duration(seconds: _cooldownSeconds)) {
-      return;
-    }
-    _lastTriggerTime = now;
-    debugPrint('[Risk] 위험 $_sustainedSeconds초 지속 → 카메라 후보 트리거');
-    onTurtleNeckDetected?.call();
+    // 알람 발사는 지속시간 점수 시스템(_updateDurationScore → onDurationAlert) 이 담당.
   }
 
   SensorPosture get currentPosture => _currentPosture;
@@ -288,10 +279,6 @@ class SensorClassifier {
     _gyrSub?.cancel();
     _accSub = null;
     _gyrSub = null;
-    _turtleNeckTimer?.cancel();
-    _turtleNeckTimer = null;
-    _graceTimer?.cancel();
-    _graceTimer = null;
     _started = false;
   }
 
@@ -317,12 +304,93 @@ class SensorClassifier {
   }
 
   void _onAcc(AccelerometerEvent e) {
-    _lastAcc = [e.x, e.y, e.z];
+    // 1) 방향 추정 + 히스테리시스 적용
+    _updateOrientation(e.x, e.y, e.z);
+    // 2) 현재 방향에 맞춰 portrait 기준 좌표계로 리매핑해서 저장
+    _lastAcc = _remapForOrientation(e.x, e.y, e.z);
     _processFrame();
   }
 
   void _onGyr(GyroscopeEvent e) {
-    _lastGyr = [e.x, e.y, e.z];
+    // 자이로도 동일한 변환을 적용해 분산 계산이 일관되게.
+    _lastGyr = _remapForOrientation(e.x, e.y, e.z);
+  }
+
+  /// 가속도 크기로 현재 폰의 물리 방향을 추정한다.
+  /// - 폰이 거의 평평하면(중력이 az에 몰림) 이전 방향 유지
+  /// - |ay|/|ax| 비율로 portrait/landscape 판정
+  /// - 신규 방향이 _orientSwitchFrames 연속 잡혀야 실제 전환 (지터 방지)
+  void _updateOrientation(double ax, double ay, double az) {
+    final g = sqrt(ax * ax + ay * ay + az * az);
+    if (g < 4.0) return; // 거의 자유낙하/이상치
+    if (az.abs() / g > _flatGravityRatio) return; // 평평하게 누움 — 판정 보류
+
+    final absX = ax.abs();
+    final absY = ay.abs();
+    DeviceOrientation? detected;
+    if (absY > absX * _orientRatio) {
+      detected = DeviceOrientation.portrait;
+    } else if (absX > absY * _orientRatio) {
+      detected = DeviceOrientation.landscape;
+    }
+    if (detected == null) return; // 비율 경계 — 이전 유지
+
+    if (detected == _orientation) {
+      _pendingOrientation = detected;
+      _orientationStreak = 0;
+      return;
+    }
+    if (detected == _pendingOrientation) {
+      _orientationStreak++;
+    } else {
+      _pendingOrientation = detected;
+      _orientationStreak = 1;
+    }
+    if (_orientationStreak >= _orientSwitchFrames) {
+      debugPrint('[Sensor] 방향 전환: ${_orientation.name} → ${detected.name}');
+      _orientation = detected;
+      _orientationStreak = 0;
+      // 방향 전환은 자세 자체가 크게 바뀌는 순간이므로 지속시간 점수도 리셋
+      _badScoreSec = 0.0;
+      _lastScoreUpdate = null;
+    }
+  }
+
+  /// 현재 방향에 맞춰 디바이스 축 → portrait 기준 축으로 변환.
+  /// landscape 에선 (x, y) 자리를 (y, -x) 로 swap (시계 반대방향 90° 회전 보상).
+  /// 디바이스 좌표계 차이로 부호가 반대이면 이 함수 한 줄만 수정.
+  List<double> _remapForOrientation(double x, double y, double z) {
+    if (_orientation == DeviceOrientation.landscape) {
+      return [y, -x, z];
+    }
+    return [x, y, z];
+  }
+
+  /// 지속시간 점수 업데이트 — 비-normal 이면 +dt, normal 이면 -dt*배수.
+  /// 임계 도달 시 쿨다운 통과하면 onDurationAlert 1회 발사하고 점수 리셋.
+  void _updateDurationScore(NeckRiskLevel level, DateTime now) {
+    final prev = _lastScoreUpdate;
+    _lastScoreUpdate = now;
+    if (prev == null) return;
+    final dt = now.difference(prev).inMilliseconds / 1000.0;
+    if (dt <= 0 || dt > _maxDtSec) return;
+
+    if (level != NeckRiskLevel.normal) {
+      _badScoreSec += dt;
+    } else {
+      _badScoreSec =
+          (_badScoreSec - dt * _recoveryMultiplier).clamp(0.0, _badScoreThresholdSec * 2);
+    }
+
+    if (_badScoreSec >= _badScoreThresholdSec) {
+      final last = _lastDurationAlertAt;
+      if (last == null || now.difference(last) >= _durationCooldown) {
+        _lastDurationAlertAt = now;
+        _badScoreSec = 0.0;
+        debugPrint('[Risk] 지속시간 누적 임계 도달 → onDurationAlert 발사');
+        onDurationAlert?.call();
+      }
+    }
   }
 
   void _processFrame() {
@@ -345,7 +413,10 @@ class SensorClassifier {
       // 자세 분류와 별개로, 매 프레임 위험도 계산 (IMU 기반 3단계).
       // 컨텍스트가 운동/수면이면 감지 비활성이므로 스킵.
       if (_currentContext.isMonitoringActive) {
-        _applyRisk(_computeRisk());
+        final st = _computeRisk();
+        _applyRisk(st);
+        // 지속시간 점수: 비-normal 누적 → 임계 + 쿨다운 통과 시 알람 콜백.
+        _updateDurationScore(st.level, DateTime.now());
       }
     }
   }
@@ -353,7 +424,6 @@ class SensorClassifier {
   void _runInference() {
     if (!_currentContext.isMonitoringActive) {
       // 운동 중 또는 수면 중 — 감지 중지
-      _cancelTurtleNeckTimers();
       return;
     }
 

@@ -1,0 +1,449 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>포스처가드 화면 설계</title>
+  <style>
+    :root {
+      --bg: #f6f7fb;
+      --paper: #ffffff;
+      --ink: #16191f;
+      --muted: #6f7785;
+      --line: #d9dee8;
+      --green: #12c59b;
+      --red: #ef3b3b;
+      --purple: #9b29cf;
+      --blue: #178eea;
+      --orange: #f5a623;
+      --brown: #7b5536;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: Arial, "Noto Sans KR", sans-serif;
+      letter-spacing: 0;
+    }
+
+    .page {
+      width: 1440px;
+      min-height: 1020px;
+      margin: 0 auto;
+      padding: 56px 68px 72px;
+      background: var(--paper);
+    }
+
+    .title-row {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 24px;
+      margin-bottom: 26px;
+    }
+
+    h1 {
+      margin: 0 0 12px;
+      font-size: 38px;
+      line-height: 1.15;
+    }
+
+    .subtitle {
+      margin: 0;
+      color: var(--muted);
+      font-size: 18px;
+      line-height: 1.5;
+    }
+
+    .legend {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(180px, 1fr));
+      gap: 10px 18px;
+      color: var(--muted);
+      font-size: 15px;
+    }
+
+    .legend span {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      white-space: nowrap;
+    }
+
+    .dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 999px;
+      display: inline-block;
+    }
+
+    .dot.green { background: var(--green); }
+    .dot.red { background: var(--red); }
+    .dot.purple { background: var(--purple); }
+    .dot.orange { background: var(--orange); }
+
+    .section {
+      border-top: 2px solid #edf0f5;
+      padding-top: 28px;
+      margin-top: 26px;
+    }
+
+    .first-section {
+      border-top: 0;
+      padding-top: 0;
+      margin-top: 0;
+    }
+
+    .section h2 {
+      margin: 0 0 16px;
+      font-size: 24px;
+    }
+
+    .bullets {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+      margin-bottom: 28px;
+    }
+
+    .bullet {
+      padding: 18px 18px 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfe;
+      min-height: 118px;
+    }
+
+    .bullet strong {
+      display: block;
+      font-size: 18px;
+      margin-bottom: 8px;
+    }
+
+    .bullet p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.5;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: 1fr 72px 1fr 72px 1fr 72px 1fr;
+      align-items: start;
+      gap: 0;
+    }
+
+    .flow-row {
+      display: contents;
+    }
+
+    .screen {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      background: #fff;
+      box-shadow: 0 8px 20px rgba(22, 25, 31, 0.08);
+    }
+
+    .screen-head {
+      min-height: 76px;
+      padding: 14px 16px 12px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfcfe;
+    }
+
+    .screen-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      font-weight: 800;
+      font-size: 17px;
+      line-height: 1.35;
+    }
+
+    .screen-desc {
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 26px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      color: #fff;
+      font-size: 12px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .tag.green { background: var(--green); }
+    .tag.red { background: var(--red); }
+    .tag.purple { background: var(--purple); }
+    .tag.blue { background: var(--blue); }
+    .tag.orange { background: var(--orange); }
+    .tag.gray { background: #707782; }
+
+    .shot-wrap {
+      position: relative;
+      padding: 16px;
+      min-height: 438px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #f5f6fa;
+    }
+
+    .phone-shot {
+      width: 190px;
+      max-height: 410px;
+      object-fit: contain;
+      border-radius: 6px;
+      box-shadow: 0 4px 14px rgba(22, 25, 31, 0.18);
+      background: #fff;
+    }
+
+    .callout {
+      position: absolute;
+      padding: 8px 10px;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.96);
+      border: 1px solid var(--line);
+      font-size: 12px;
+      font-weight: 800;
+      color: #343944;
+      box-shadow: 0 4px 12px rgba(22, 25, 31, 0.12);
+      max-width: 150px;
+      line-height: 1.35;
+    }
+
+    .callout.green { border-color: rgba(18, 197, 155, 0.45); color: #07896b; }
+    .callout.red { border-color: rgba(239, 59, 59, 0.45); color: #c22222; }
+    .callout.purple { border-color: rgba(155, 41, 207, 0.45); color: #8021a8; }
+    .callout.orange { border-color: rgba(245, 166, 35, 0.55); color: #a46700; }
+
+    .top-left { top: 28px; left: 18px; }
+    .top-right { top: 28px; right: 18px; }
+    .mid-right { top: 185px; right: 18px; }
+    .bottom-left { left: 18px; bottom: 28px; }
+    .bottom-right { right: 18px; bottom: 28px; }
+
+    .arrow {
+      position: relative;
+      min-height: 514px;
+    }
+
+    .arrow::before {
+      content: "";
+      position: absolute;
+      top: 252px;
+      left: 12px;
+      width: 46px;
+      height: 3px;
+      background: var(--brown);
+    }
+
+    .arrow::after {
+      content: "";
+      position: absolute;
+      top: 246px;
+      left: 52px;
+      width: 0;
+      height: 0;
+      border-top: 8px solid transparent;
+      border-bottom: 8px solid transparent;
+      border-left: 12px solid var(--brown);
+    }
+
+    .down-arrow {
+      width: 100%;
+      height: 68px;
+      position: relative;
+      grid-column: 1 / -1;
+    }
+
+    .down-arrow::before {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 6px;
+      width: 3px;
+      height: 42px;
+      background: var(--brown);
+    }
+
+    .down-arrow::after {
+      content: "";
+      position: absolute;
+      left: calc(50% - 7px);
+      top: 44px;
+      width: 0;
+      height: 0;
+      border-left: 8px solid transparent;
+      border-right: 8px solid transparent;
+      border-top: 12px solid var(--brown);
+    }
+
+    .wide-flow {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 18px;
+      margin-top: 18px;
+    }
+
+    .mini-note {
+      margin-top: 18px;
+      padding: 18px 22px;
+      border-radius: 8px;
+      background: #fff8e8;
+      border: 1px solid #f2ddb1;
+      color: #6c4a16;
+      font-size: 16px;
+      line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="section first-section">
+      <h2>화면 종류</h2>
+      <div class="bullets">
+        <article class="bullet">
+          <strong>홈 화면</strong>
+          <p>연결 상태, 오늘 많이 쓴 앱, 카테고리별 주의 추이를 보여주고 중앙 측정 버튼으로 측정을 시작한다.</p>
+        </article>
+        <article class="bullet">
+          <strong>오버레이 화면</strong>
+          <p>영상앱 또는 게임앱 위에 모드 버튼이 뜬다. 주의 상태는 모드 버튼 옆에 잠깐 나타났다가 사라진다.</p>
+        </article>
+        <article class="bullet">
+          <strong>앱 설정 화면</strong>
+          <p>프로필에서 자세 오버레이 시작, 모드별 카메라 사용, 알람, 측정 기준을 설정한다.</p>
+        </article>
+        <article class="bullet">
+          <strong>리포트 화면</strong>
+          <p>오늘, 주간, 월간 탭에서 총 사용시간과 총 주의 횟수를 확인하고 카테고리별 앱 상세로 들어간다.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>핵심 사용자 흐름</h2>
+      <div class="flow">
+        <article class="screen">
+          <div class="screen-head">
+            <div class="screen-title">1. 홈 <span class="tag green">대기</span></div>
+            <div class="screen-desc">연결됨 상태와 오늘의 주요 앱/주의 추이를 확인한다.</div>
+          </div>
+          <div class="shot-wrap">
+            <img class="phone-shot" src="screen_design_assets/home.jpg" alt="홈 화면" />
+            <div class="callout green bottom-right">중앙 버튼 클릭<br />측정 시작</div>
+          </div>
+        </article>
+
+        <div class="arrow" aria-hidden="true"></div>
+
+        <article class="screen">
+          <div class="screen-head">
+            <div class="screen-title">2. 측정 시작 <span class="tag red">ON</span></div>
+            <div class="screen-desc">초록 버튼을 누르면 빨간 측정 상태로 바뀌고 센서 측정을 시작한다.</div>
+          </div>
+          <div class="shot-wrap">
+            <img class="phone-shot" src="screen_design_assets/home.jpg" alt="홈 측정 버튼 화면" />
+            <div class="callout red top-right">빨간 상태로 전환<br />센서 측정 시작</div>
+            <div class="callout green bottom-left">측정 중<br />기록 수집</div>
+          </div>
+        </article>
+
+        <div class="arrow" aria-hidden="true"></div>
+
+        <article class="screen">
+          <div class="screen-head">
+            <div class="screen-title">3. 앱 감지 <span class="tag purple">오버레이</span></div>
+            <div class="screen-desc">YouTube나 영상앱 위에 영상 모드가 표시되고, 측정 버튼으로 센서 측정을 시작한다.</div>
+          </div>
+          <div class="shot-wrap">
+            <img class="phone-shot" src="screen_design_assets/youtube_overlay.jpg" alt="유튜브 영상 모드 오버레이" />
+            <div class="callout purple top-right">영상 모드 표시<br />현재 앱 상태 안내</div>
+            <div class="callout green bottom-right">측정 버튼 클릭<br />측정 시작</div>
+          </div>
+        </article>
+
+        <div class="arrow" aria-hidden="true"></div>
+
+        <article class="screen">
+          <div class="screen-head">
+            <div class="screen-title">4. 리포트 반영 <span class="tag orange">주의</span></div>
+            <div class="screen-desc">주의가 발생하면 앱, 카테고리, 시간 기준으로 저장되어 리포트에 반영된다.</div>
+          </div>
+          <div class="shot-wrap">
+            <img class="phone-shot" src="screen_design_assets/report_today.jpg" alt="오늘 리포트 반영 화면" />
+            <div class="callout orange top-right">주의 횟수<br />리포트 반영</div>
+            <div class="callout red bottom-left">영상 카테고리<br />상세 확인</div>
+          </div>
+        </article>
+      </div>
+
+      <div class="down-arrow" aria-hidden="true"></div>
+
+      <div class="wide-flow">
+        <article class="screen">
+          <div class="screen-head">
+            <div class="screen-title">5. 오늘 리포트 <span class="tag green">오늘</span></div>
+            <div class="screen-desc">카테고리별 사용 비율과 주의 횟수를 한눈에 확인한다.</div>
+          </div>
+          <div class="shot-wrap">
+            <img class="phone-shot" src="screen_design_assets/report_today.jpg" alt="오늘 리포트 화면" />
+            <div class="callout green mid-right">영상 30m<br />주의 36회</div>
+          </div>
+        </article>
+
+        <article class="screen">
+          <div class="screen-head">
+            <div class="screen-title">6. 주간 리포트 <span class="tag green">주간</span></div>
+            <div class="screen-desc">요일별 사용량과 주의 횟수를 막대 그래프로 비교한다.</div>
+          </div>
+          <div class="shot-wrap">
+            <img class="phone-shot" src="screen_design_assets/report_week.jpg" alt="주간 리포트 화면" />
+            <div class="callout green top-left">오늘 / 주간 / 월간<br />탭 전환</div>
+          </div>
+        </article>
+
+        <article class="screen">
+          <div class="screen-head">
+            <div class="screen-title">7. 카드 펼침 <span class="tag gray">상세</span></div>
+            <div class="screen-desc">카테고리 카드를 펼쳐 앱별 사용 시간과 주의 횟수를 본다.</div>
+          </div>
+          <div class="shot-wrap">
+            <img class="phone-shot" src="screen_design_assets/report_expanded.jpg" alt="리포트 카드 펼침 화면" />
+            <div class="callout orange bottom-right">앱별 상세<br />주의 횟수 표시</div>
+          </div>
+        </article>
+
+        <article class="screen">
+          <div class="screen-head">
+            <div class="screen-title">8. 앱 설정 <span class="tag blue">설정</span></div>
+            <div class="screen-desc">프로필에서 자세 오버레이, 모드별 카메라 사용, 알람, 측정 기준을 설정한다.</div>
+          </div>
+          <div class="shot-wrap">
+            <img class="phone-shot" src="screen_design_assets/profile_settings.jpg" alt="앱 설정 화면" />
+            <div class="callout purple top-left">자세 오버레이<br />시작 버튼</div>
+            <div class="callout orange bottom-right">모드별 카메라<br />사용 설정</div>
+          </div>
+        </article>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

@@ -32,11 +32,8 @@ dependencies:
     sdk: flutter
 
   cupertino_icons: ^1.0.8
-  web_socket_channel: ^3.0.1
-  camera: ^0.11.0+2           # 폰 카메라 주기 촬영
-  permission_handler: ^11.3.1  # 카메라 권한
-  wakelock_plus: ^1.3.4        # 백그라운드 측정 중 화면 꺼짐 방지
-  flutter_foreground_task: ^8.0.2 # 포그라운드 서비스 (백그라운드 카메라 유지)
+  permission_handler: ^11.3.1     # 사용 정보 / 오버레이 / 폰 상태 권한
+  flutter_foreground_task: ^8.0.2 # 포그라운드 서비스 (백그라운드 센서 유지)
   sensors_plus: ^6.1.0            # 가속도계 + 자이로스코프
   tflite_flutter: ^0.11.0         # TFLite 추론 (센서 자세 분류)
   # flutter_overlay_window 제거 — 네이티브 Kotlin OverlayService로 대체됨

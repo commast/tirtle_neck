@@ -1,19 +1,18 @@
 import 'package:flutter/material.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../constants.dart';
 import '../models/detected_context.dart';
-import '../services/camera_mode_settings.dart';
 import '../services/posture_calibration.dart';
 import '../services/alert_settings.dart';
+import '../services/foreground_app_channel.dart';
 
 class ProfileTab extends StatefulWidget {
   final VoidCallback?         onOverlayStart;    // 오버레이 수동 시작
-  final CameraModeSettings?   cameraSettings;    // 모드별 카메라 옵트인 (Android)
   final PostureCalibration?   calibration;       // 모드별 baseline 자세
 
   const ProfileTab({
     super.key,
     this.onOverlayStart,
-    this.cameraSettings,
     this.calibration,
   });
 
@@ -21,7 +20,40 @@ class ProfileTab extends StatefulWidget {
   State<ProfileTab> createState() => _ProfileTabState();
 }
 
-class _ProfileTabState extends State<ProfileTab> {
+class _ProfileTabState extends State<ProfileTab> with WidgetsBindingObserver {
+  bool _usageGranted = false;
+  bool _overlayGranted = false;
+  final _fgApp = ForegroundAppChannel();
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _refreshPermissions();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // 설정 화면에서 권한 켜고 돌아오면 자동 재확인
+    if (state == AppLifecycleState.resumed) _refreshPermissions();
+  }
+
+  Future<void> _refreshPermissions() async {
+    final usage = await _fgApp.hasPermission();
+    final overlay = await Permission.systemAlertWindow.isGranted;
+    if (!mounted) return;
+    setState(() {
+      _usageGranted = usage;
+      _overlayGranted = overlay;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return SafeArea(
@@ -42,15 +74,11 @@ class _ProfileTabState extends State<ProfileTab> {
               style: TextStyle(color: Colors.grey[500], fontSize: 13)),
           const SizedBox(height: 24),
 
-          // 오버레이 수동 시작 카드 (Android 전용)
+          // 권한 상태 카드 (Android 전용)
           if (widget.onOverlayStart != null) ...[
-            _overlayCard(),
+            _permissionsCard(),
             const SizedBox(height: 10),
-          ],
-
-          // 모드별 카메라 옵트인 (Android 전용)
-          if (widget.cameraSettings != null) ...[
-            _cameraModeCard(),
+            _overlayCard(),
             const SizedBox(height: 10),
           ],
 
@@ -62,8 +90,6 @@ class _ProfileTabState extends State<ProfileTab> {
             const SizedBox(height: 10),
           ] else
             _plainListTile('측정 설정', Icons.tune_rounded, enabled: false),
-          _plainListTile('도움말',    Icons.help_outline_rounded, enabled: false),
-          _plainListTile('앱 정보',   Icons.info_outline_rounded, enabled: false),
           const SizedBox(height: 100),
         ]),
       ),
@@ -174,58 +200,90 @@ class _ProfileTabState extends State<ProfileTab> {
     );
   }
 
-  Widget _cameraModeCard() {
-    final s = widget.cameraSettings!;
-    return AnimatedBuilder(
-      animation: s,
-      builder: (context, _) {
-        return Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: Colors.deepOrange.withValues(alpha: 0.3)),
-            boxShadow: [BoxShadow(
-                color: Colors.black.withValues(alpha: 0.04), blurRadius: 6)],
+  Widget _permissionsCard() {
+    final allGranted = _usageGranted && _overlayGranted;
+    final color = allGranted ? kGreen : Colors.orange;
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: color.withValues(alpha: 0.4)),
+        boxShadow: [BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04), blurRadius: 6)],
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Icon(allGranted ? Icons.verified_rounded : Icons.warning_amber_rounded,
+              color: color, size: 18),
+          const SizedBox(width: 6),
+          const Text('권한 상태',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+          const Spacer(),
+          IconButton(
+            tooltip: '새로고침',
+            iconSize: 18,
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(),
+            onPressed: _refreshPermissions,
+            icon: const Icon(Icons.refresh_rounded, color: Colors.grey),
           ),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            const Row(children: [
-              Icon(Icons.camera_alt_rounded, color: Colors.deepOrange, size: 18),
-              SizedBox(width: 6),
-              Text('모드별 카메라 사용',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-            ]),
-            const SizedBox(height: 4),
-            Text(
-              '센서가 거북목 위험을 감지했을 때, 게임/영상 모드에서만 카메라로 자세를 검증합니다.',
-              style: TextStyle(fontSize: 11, color: Colors.grey[600])),
-            const SizedBox(height: 8),
-            SwitchListTile(
-              dense: true,
-              contentPadding: EdgeInsets.zero,
-              title: const Text('게임 모드에서 카메라 사용',
-                  style: TextStyle(fontSize: 13)),
-              subtitle: const Text('위험 단계 5초 지속 시 자세 촬영',
-                  style: TextStyle(fontSize: 11)),
-              value: s.inGame,
-              onChanged: s.setInGame,
-              activeThumbColor: Colors.deepOrange,
-            ),
-            SwitchListTile(
-              dense: true,
-              contentPadding: EdgeInsets.zero,
-              title: const Text('영상 모드에서 카메라 사용',
-                  style: TextStyle(fontSize: 13)),
-              subtitle: const Text('위험 단계 5초 지속 시 자세 촬영',
-                  style: TextStyle(fontSize: 11)),
-              value: s.inVideo,
-              onChanged: s.setInVideo,
-              activeThumbColor: Colors.deepOrange,
-            ),
-          ]),
-        );
-      },
+        ]),
+        const SizedBox(height: 4),
+        Text('두 권한 모두 허용되어야 다른 앱 사용 중에 자세 감지가 작동합니다.',
+            style: TextStyle(fontSize: 11, color: Colors.grey[600])),
+        const SizedBox(height: 10),
+        _permRow(
+          label: '앱 사용 정보 접근',
+          desc: '포그라운드 앱(영상/게임/SNS/학습) 감지',
+          granted: _usageGranted,
+          onGrant: () async {
+            await _fgApp.openSettings();
+            await Future.delayed(const Duration(milliseconds: 400));
+            await _refreshPermissions();
+          },
+        ),
+        const SizedBox(height: 8),
+        _permRow(
+          label: '다른 앱 위에 표시',
+          desc: '오버레이 칩 표시',
+          granted: _overlayGranted,
+          onGrant: () async {
+            await Permission.systemAlertWindow.request();
+            await _refreshPermissions();
+          },
+        ),
+      ]),
     );
+  }
+
+  Widget _permRow({
+    required String label,
+    required String desc,
+    required bool granted,
+    required VoidCallback onGrant,
+  }) {
+    return Row(children: [
+      Icon(granted ? Icons.check_circle : Icons.cancel,
+          color: granted ? kGreen : Colors.redAccent, size: 16),
+      const SizedBox(width: 8),
+      Expanded(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(label,
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+          Text(desc,
+              style: TextStyle(fontSize: 10, color: Colors.grey[500])),
+        ]),
+      ),
+      if (!granted)
+        TextButton(
+          onPressed: onGrant,
+          style: TextButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+          ),
+          child: const Text('허용', style: TextStyle(fontSize: 12)),
+        ),
+    ]);
   }
 
   Widget _overlayCard() {
@@ -300,7 +358,7 @@ class _ProfileTabState extends State<ProfileTab> {
               leading: const Icon(Icons.notifications_active_rounded, color: kGreen),
               title: const Text('알람 설정', style: TextStyle(fontSize: 14)),
               subtitle: Text(
-                _alarmSubtitle(s.vibration, s.sound),
+                _alarmSubtitle(s),
                 style: TextStyle(fontSize: 11, color: Colors.grey[500]),
               ),
               children: [
@@ -308,45 +366,127 @@ class _ProfileTabState extends State<ProfileTab> {
                   '주의/위험 자세가 감지되면 진동이나 소리로 알려드립니다.',
                   style: TextStyle(fontSize: 11, color: Colors.grey[600]),
                 ),
+                const SizedBox(height: 8),
+                // ── 주의 (caution) ─────────────────────────────
+                _sectionLabel('주의 (1~2회 누적)', Colors.orange),
                 SwitchListTile(
                   dense: true,
                   contentPadding: EdgeInsets.zero,
-                  title: const Text('진동 알림', style: TextStyle(fontSize: 13)),
-                  subtitle: const Text('주의 단계 진입 시 폰 진동',
+                  title: const Text('진동', style: TextStyle(fontSize: 13)),
+                  subtitle: const Text('주의 발생 시 폰 진동',
                       style: TextStyle(fontSize: 11)),
-                  value: s.vibration,
-                  onChanged: s.setVibration,
-                  activeThumbColor: kGreen,
+                  value: s.cautionVibration,
+                  onChanged: s.setCautionVibration,
+                  activeThumbColor: Colors.orange,
                 ),
+                SwitchListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('소리', style: TextStyle(fontSize: 13)),
+                  subtitle: const Text('주의 발생 시 알림음',
+                      style: TextStyle(fontSize: 11)),
+                  value: s.cautionSound,
+                  onChanged: s.setCautionSound,
+                  activeThumbColor: Colors.orange,
+                ),
+                const SizedBox(height: 4),
+                // ── 경고 (risk) ────────────────────────────────
+                _sectionLabel('경고 (3회 누적 시 발사)', Colors.red),
+                SwitchListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('진동', style: TextStyle(fontSize: 13)),
+                  subtitle: const Text('경고 발생 시 폰 진동',
+                      style: TextStyle(fontSize: 11)),
+                  value: s.riskVibration,
+                  onChanged: s.setRiskVibration,
+                  activeThumbColor: Colors.red,
+                ),
+                SwitchListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('소리', style: TextStyle(fontSize: 13)),
+                  subtitle: const Text('경고 발생 시 알림음',
+                      style: TextStyle(fontSize: 11)),
+                  value: s.riskSound,
+                  onChanged: s.setRiskSound,
+                  activeThumbColor: Colors.red,
+                ),
+                const Divider(height: 16),
+                // ── 공용 세기 슬라이더 ─────────────────────────
                 _levelSlider(
                   label: '진동 세기',
                   value: s.vibrationLevel,
-                  enabled: s.vibration,
+                  enabled: s.anyVibrationOn,
                   onChanged: s.setVibrationLevel,
                   onChangeEnd: (_) => s.previewVibration(),
-                ),
-                SwitchListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('소리 알림', style: TextStyle(fontSize: 13)),
-                  subtitle: const Text('시스템 알림음 재생',
-                      style: TextStyle(fontSize: 11)),
-                  value: s.sound,
-                  onChanged: s.setSound,
-                  activeThumbColor: kGreen,
                 ),
                 _levelSlider(
                   label: '소리 크기',
                   value: s.soundLevel,
-                  enabled: s.sound,
+                  enabled: s.anySoundOn,
                   onChanged: s.setSoundLevel,
                   onChangeEnd: (_) => s.previewSound(),
+                ),
+                const Divider(height: 16),
+                Text(
+                  '경고 쿨다운 — ${AlertSettings.riskWindowMinutes}분 내 주의 ${AlertSettings.riskCautionCount}회 누적 시 경고가 울리며, 이후 ${s.riskCooldownMinutes}분 동안은 재경고하지 않습니다.',
+                  style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                ),
+                _intSlider(
+                  label: '경고 쿨다운',
+                  value: s.riskCooldownMinutes.toDouble(),
+                  min: 1, max: 60,
+                  onChanged: (v) => s.setRiskCooldownMinutes(v.round()),
+                  suffix: '분',
                 ),
               ],
             ),
           ),
         );
       },
+    );
+  }
+
+  Widget _intSlider({
+    required String label,
+    required double value,
+    required double min,
+    required double max,
+    required ValueChanged<double> onChanged,
+    required String suffix,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 12, right: 4, bottom: 4),
+      child: Row(children: [
+        SizedBox(
+          width: 80,
+          child: Text(label,
+              style: TextStyle(fontSize: 11, color: Colors.grey[600])),
+        ),
+        Expanded(
+          child: SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              trackHeight: 3,
+              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
+            ),
+            child: Slider(
+              value: value.clamp(min, max),
+              min: min, max: max,
+              divisions: (max - min).round(),
+              activeColor: kGreen,
+              inactiveColor: Colors.grey[300],
+              onChanged: onChanged,
+            ),
+          ),
+        ),
+        SizedBox(
+          width: 44,
+          child: Text('${value.round()}$suffix',
+              textAlign: TextAlign.end,
+              style: TextStyle(fontSize: 11, color: Colors.grey[600])),
+        ),
+      ]),
     );
   }
 
@@ -391,11 +531,34 @@ class _ProfileTabState extends State<ProfileTab> {
     );
   }
 
-  String _alarmSubtitle(bool vib, bool snd) {
-    if (vib && snd) return '진동·소리 모두 켜짐';
-    if (vib) return '진동만 켜짐';
-    if (snd) return '소리만 켜짐';
-    return '모두 꺼짐';
+  String _alarmSubtitle(AlertSettings s) {
+    final caution = _summary(s.cautionVibration, s.cautionSound);
+    final risk    = _summary(s.riskVibration,    s.riskSound);
+    if (caution == risk) return '주의·경고 $caution';
+    return '주의 $caution · 경고 $risk';
+  }
+
+  String _summary(bool vib, bool snd) {
+    if (vib && snd) return '진동·소리';
+    if (vib) return '진동만';
+    if (snd) return '소리만';
+    return '꺼짐';
+  }
+
+  Widget _sectionLabel(String text, Color color) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 6, bottom: 2),
+      child: Row(children: [
+        Container(width: 4, height: 12, color: color),
+        const SizedBox(width: 6),
+        Text(text,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: color,
+            )),
+      ]),
+    );
   }
 
   Widget _plainListTile(String label, IconData icon, {bool enabled = true}) {

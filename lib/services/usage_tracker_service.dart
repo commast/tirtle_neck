@@ -64,6 +64,7 @@ class UsageTrackerService extends ChangeNotifier {
     _initialized = true;
     _detector = detector;
     await _load();
+    await _autoSeedSparse();
     // 초기값 한 번 반영
     _consumeSnapshot();
     void listener() => _consumeSnapshot();
@@ -122,7 +123,8 @@ class UsageTrackerService extends ChangeNotifier {
     _currentStart = now;
   }
 
-  /// 외부에서 주의/위험 단계 진입 시 1회 호출. 현재 포그라운드 앱과 시간대에 기록.
+  /// 외부에서 주의(caution) 단계 진입 시 1회 호출. 현재 포그라운드 앱과 시간대에 기록.
+  /// 경고(risk)도 주의 카운트(warningCount) 에 포함됨. 경고만 별도 추적은 recordRisk().
   void recordWarning() {
     _accrueCurrent();
     final now = DateTime.now();
@@ -147,14 +149,42 @@ class UsageTrackerService extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 홈탭: 오늘 가장 많이 사용한 앱 (없으면 null).
+  /// 경고(risk) 단계 발사 시 호출. recordWarning() 와 별개로 호출되며
+  /// riskCount만 증가시킨다. (warningCount 는 호출 측에서 별도로 추가하지 않음 — 이미
+  /// recordWarning 에서 누적됐다고 가정).
+  void recordRisk() {
+    _accrueCurrent();
+    final snap = _todaySnapshot();
+    final pkg = _currentPkg;
+    if (pkg != null) {
+      final rec = snap.apps.putIfAbsent(
+        pkg,
+        () => AppUsageRecord(
+          packageName: pkg,
+          label: _currentLabel,
+          category: _currentCategory,
+        ),
+      );
+      rec.riskCount += 1;
+    }
+    _save();
+    notifyListeners();
+  }
+
+  /// 홈탭: 오늘 주의·경고가 가장 많았던 앱 (자세를 가장 나쁘게 만든 주범).
+  /// 동률이면 사용 시간이 긴 앱 우선. 주의·경고 0회뿐이면 null 반환 → 빈 상태 표시.
   AppUsageRecord? topAppToday() {
     _accrueCurrent();
     final snap = _byDate[_dateKey(DateTime.now())];
     if (snap == null || snap.apps.isEmpty) return null;
     AppUsageRecord? top;
     for (final r in snap.apps.values) {
-      if (top == null || r.usageSeconds > top.usageSeconds) top = r;
+      if (r.warningCount <= 0) continue;
+      if (top == null ||
+          r.warningCount > top.warningCount ||
+          (r.warningCount == top.warningCount && r.usageSeconds > top.usageSeconds)) {
+        top = r;
+      }
     }
     return top;
   }
@@ -279,6 +309,103 @@ class UsageTrackerService extends ChangeNotifier {
       warnings: warnings,
       lastIndex: 29,
     );
+  }
+
+  /// 이번 달 1일~말일 카테고리별 일별 주의 횟수.
+  /// dayHasData[i] = true 면 그 날 실제 스냅샷이 존재. false 면 차트에서 스킵 가능.
+  /// todayIndex = today.day - 1 (0-based). 미래 날짜는 0 유지.
+  ({
+    Map<AppCategory, List<int>> warnings,
+    List<bool> dayHasData,
+    int daysInMonth,
+    int todayIndex,
+  }) dailyByCategoryThisCalendarMonth() {
+    _accrueCurrent();
+    final now = DateTime.now();
+    final y = now.year;
+    final m = now.month;
+    final daysInMonth = DateTime(y, m + 1, 0).day;
+    final todayIdx = now.day - 1;
+
+    final warnings = <AppCategory, List<int>>{
+      for (final c in AppCategory.values) c: List<int>.filled(daysInMonth, 0),
+    };
+    final hasData = List<bool>.filled(daysInMonth, false);
+    for (int i = 0; i <= todayIdx; i++) {
+      final snap = _byDate[_dateKey(DateTime(y, m, i + 1))];
+      if (snap == null || snap.apps.isEmpty) continue;
+      hasData[i] = true;
+      for (final r in snap.apps.values) {
+        warnings[r.category]![i] += r.warningCount;
+      }
+    }
+    return (
+      warnings: warnings,
+      dayHasData: hasData,
+      daysInMonth: daysInMonth,
+      todayIndex: todayIdx,
+    );
+  }
+
+  // ── 발표용 샘플 데이터 (sparse, 2일 간격) ─────────────────
+  // 진짜 데이터가 없는 날에만 채워넣어 곡선이 자연스럽게 보이도록 한다.
+  static const _seedDays = [1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25];
+  static const _seedCats = [
+    AppCategory.video, AppCategory.game, AppCategory.social, AppCategory.study,
+  ];
+  static const _seedWarn = <AppCategory, List<int>>{
+    AppCategory.video:  [3, 4, 5, 6, 7, 8, 8, 7, 6, 5, 5, 6, 7],
+    AppCategory.game:   [4, 5, 6, 6, 5, 4, 5, 6, 7, 7, 6, 5, 4],
+    AppCategory.social: [8, 9,10, 9, 8, 6, 5, 4, 5, 6, 7, 8, 9],
+    AppCategory.study:  [2, 2, 3, 4, 5, 5, 4, 3, 3, 4, 5, 6, 6],
+  };
+  static const _seedSec = <AppCategory, List<int>>{
+    AppCategory.video:  [2400, 3600, 4800, 5400, 6600, 7200, 7200, 6000, 5400, 4200, 4200, 5400, 6000],
+    AppCategory.game:   [2400, 3000, 3600, 4200, 3600, 2400, 3000, 4200, 5400, 4800, 3600, 3000, 2400],
+    AppCategory.social: [4800, 6000, 7200, 6600, 5400, 3600, 2400, 1800, 2400, 3600, 4800, 6000, 7200],
+    AppCategory.study:  [1800, 1800, 2400, 3000, 3600, 4200, 3600, 2400, 2400, 3000, 3600, 4800, 5400],
+  };
+  static const _seedApp = <AppCategory, (String, String)>{
+    AppCategory.video:  ('com.google.android.youtube', 'YouTube'),
+    AppCategory.game:   ('com.mojang.minecraftpe', 'Minecraft'),
+    AppCategory.social: ('com.instagram.android', 'Instagram'),
+    AppCategory.study:  ('com.google.android.apps.docs', 'Google Docs'),
+  };
+
+  /// 이번 달의 지정된 날짜들 중, 아직 스냅샷이 없는 날에만 샘플 데이터를 주입한다.
+  /// 실제 사용 데이터는 보존된다.
+  Future<void> _autoSeedSparse() async {
+    final now = DateTime.now();
+    final y = now.year;
+    final m = now.month;
+    var changed = false;
+    for (int i = 0; i < _seedDays.length; i++) {
+      final day = _seedDays[i];
+      if (day >= now.day) break; // 오늘 또는 미래는 시드하지 않음
+      final key = _dateKey(DateTime(y, m, day));
+      if (_byDate.containsKey(key)) continue; // 실제 데이터 보존
+      final snap = DailyUsageSnapshot(date: key);
+      for (final cat in _seedCats) {
+        final (pkg, label) = _seedApp[cat]!;
+        final warn = _seedWarn[cat]![i];
+        final secs = _seedSec[cat]![i];
+        snap.apps[pkg] = AppUsageRecord(
+          packageName: pkg, label: label, category: cat,
+          usageSeconds: secs, warningCount: warn,
+        );
+        if (warn > 0) {
+          final h1 = (9 + cat.index * 3) % 24;
+          final h2 = (15 + cat.index * 2) % 24;
+          snap.hourlyWarnings[h1] += warn ~/ 2;
+          snap.hourlyWarnings[h2] += warn - warn ~/ 2;
+          snap.categoryHourlyWarnings[cat]![h1] += warn ~/ 2;
+          snap.categoryHourlyWarnings[cat]![h2] += warn - warn ~/ 2;
+        }
+      }
+      _byDate[key] = snap;
+      changed = true;
+    }
+    if (changed) await _save();
   }
 
   DailyUsageSnapshot _todaySnapshot() {

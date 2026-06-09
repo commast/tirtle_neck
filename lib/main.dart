@@ -14,7 +14,8 @@ class TirtleApp extends StatelessWidget {
   const TirtleApp({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context)
+   {
     return MaterialApp(
       title: '포스처가드', 
       debugShowCheckedModeBanner: false,
@@ -24,7 +25,7 @@ class TirtleApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(
           seedColor: kGreen,
           brightness: Brightness.light,
-        ),
+        ), 
       ),
       home: const MainScreen(),
     );

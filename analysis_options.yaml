@@ -9,20 +9,21 @@
 # packages, and plugins designed to encourage good coding practices.
 include: package:flutter_lints/flutter.yaml
 
+analyzer:
+  errors:
+    # 데드코드 자동 감지: 미사용 import/필드/요소/지역변수/도달 불가 코드
+    unused_import: warning
+    unused_field: warning
+    unused_element: warning
+    unused_local_variable: warning
+    dead_code: warning
+
 linter:
-  # The lint rules applied to this project can be customized in the
-  # section below to disable rules from the `package:flutter_lints/flutter.yaml`
-  # included above or to enable additional rules. A list of all available lints
-  # and their documentation is published at https://dart.dev/lints.
-  #
-  # Instead of disabling a lint rule for the entire project in the
-  # section below, it can also be suppressed for a single line of code
-  # or a specific dart file by using the `// ignore: name_of_lint` and
-  # `// ignore_for_file: name_of_lint` syntax on the line or in the file
-  # producing the lint.
   rules:
-    # avoid_print: false  # Uncomment to disable the `avoid_print` rule
-    # prefer_single_quotes: true  # Uncomment to enable the `prefer_single_quotes` rule
+    # 데드코드·정리 관련 추가 룰
+    avoid_unused_constructor_parameters: true
+    prefer_final_fields: true
+    prefer_final_locals: true
 
 # Additional information about this file can be found at
 # https://dart.dev/guides/language/analysis-options

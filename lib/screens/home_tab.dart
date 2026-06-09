@@ -1,3 +1,4 @@
+import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import '../constants.dart';
 import '../models/app_usage_record.dart';
@@ -5,9 +6,7 @@ import '../services/app_category_classifier.dart';
 import '../services/usage_tracker_service.dart';
 
 class HomeTab extends StatefulWidget {
-  final bool connected;
-
-  const HomeTab({super.key, required this.connected});
+  const HomeTab({super.key});
 
   @override
   State<HomeTab> createState() => _HomeTabState();
@@ -65,39 +64,17 @@ class _HomeTabState extends State<HomeTab> {
   }
 
   Widget _buildAppBarRow() {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('안녕하세요!',
-              style: TextStyle(fontSize: 14, color: Colors.grey[600])),
-          const Text('포스처가드',
-              style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-        ]),
-        Row(children: [
-          Container(
-            width: 8, height: 8,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: widget.connected ? kGreen : Colors.redAccent,
-            ),
-          ),
-          const SizedBox(width: 6),
-          Text(
-            widget.connected ? '연결됨' : '연결 중',
-            style: TextStyle(
-              fontSize: 12,
-              color: widget.connected ? kGreen : Colors.redAccent,
-            ),
-          ),
-        ]),
-      ],
-    );
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text('안녕하세요!',
+          style: TextStyle(fontSize: 14, color: Colors.grey[600])),
+      const Text('포스처가드',
+          style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+    ]);
   }
 
   Widget _buildTopAppCard() {
     final top = UsageTrackerService.instance.topAppToday();
-    final hasData = top != null && top.usageSeconds > 0;
+    final hasData = top != null && top.warningCount > 0;
 
     return Container(
       padding: const EdgeInsets.all(22),
@@ -127,7 +104,7 @@ class _HomeTabState extends State<HomeTab> {
     return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Expanded(
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Text('오늘 가장 많이 쓴 앱',
+          const Text('오늘 자세가 가장 나빴던 앱',
               style: TextStyle(color: Colors.white70, fontSize: 13)),
           const SizedBox(height: 8),
           Text(
@@ -160,12 +137,12 @@ class _HomeTabState extends State<HomeTab> {
           ]),
           const SizedBox(height: 16),
           Row(children: [
-            Expanded(child: _miniStat('주의·위험', '${top.warningCount}회')),
+            Expanded(child: _miniStat('총 알림', '${top.warningCount}회')),
             const SizedBox(width: 10),
-            Expanded(child: _miniStat('시간당 주의+경고',
-                top.usageSeconds == 0
-                    ? '—'
-                    : '${(top.warningCount / (top.usageSeconds / 3600)).toStringAsFixed(1)}회')),
+            Expanded(child: _miniStat(
+              '주의 / 경고',
+              '${top.cautionCount} / ${top.riskCount}',
+            )),
           ]),
         ]),
       ),
@@ -174,11 +151,11 @@ class _HomeTabState extends State<HomeTab> {
 
   Widget _topAppEmptyContent() {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      const Text('오늘 가장 많이 쓴 앱',
+      const Text('오늘 자세가 가장 나빴던 앱',
           style: TextStyle(color: Colors.white70, fontSize: 13)),
       const SizedBox(height: 16),
       Text(
-        '아직 측정된 앱 사용 기록이 없어요.\n잠시 후 자동으로 집계됩니다.',
+        '오늘은 아직 주의·경고가 없어요.\n좋은 자세를 유지하고 계세요!',
         style: TextStyle(color: Colors.white.withValues(alpha: 0.85), fontSize: 14, height: 1.4),
       ),
     ]);
@@ -202,16 +179,46 @@ class _HomeTabState extends State<HomeTab> {
 
   Widget _buildCategoryChartSection() {
     final tracker = UsageTrackerService.instance;
-    final data = _weeklyView
+    final rawData = _weeklyView
         ? tracker.weeklyByCategory()
         : tracker.hourlyByCategoryToday();
     final lastIdx = _weeklyView ? tracker.todayWeekdayIndex() : tracker.todayHourIndex();
-    final hasAnyData = data.values.any((list) {
+    final slots = _weeklyView ? 7 : 24;
+
+    int maxV = 4;
+    final lines = <LineChartBarData>[];
+    for (final c in _chartCategories) {
+      final list = rawData[c];
+      if (list == null) continue;
+      final spots = <FlSpot>[];
       for (int i = 0; i <= lastIdx; i++) {
-        if (list[i] > 0) return true;
+        final v = list[i];
+        if (v > maxV) maxV = v;
+        spots.add(FlSpot(i.toDouble(), v.toDouble()));
       }
-      return false;
-    });
+      if (spots.isEmpty) continue;
+      final color = _categoryColor(c);
+      lines.add(LineChartBarData(
+        spots: spots,
+        isCurved: false,
+        color: color,
+        barWidth: 1.5,
+        isStrokeCapRound: true,
+        dotData: FlDotData(
+          show: true,
+          getDotPainter: (s, _, _, _) => FlDotCirclePainter(
+            radius: s.y > 0 ? 3.0 : 1.5,
+            color: s.y > 0 ? color : Colors.transparent,
+            strokeWidth: s.y > 0 ? 1.5 : 0,
+            strokeColor: Colors.white,
+          ),
+        ),
+      ));
+    }
+
+    // 주별 x축 라벨
+    const weekLabels = ['월', '화', '수', '목', '금', '토', '일'];
+    final interval = (maxV / 4).clamp(1.0, double.infinity);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -236,7 +243,7 @@ class _HomeTabState extends State<HomeTab> {
         const SizedBox(height: 12),
         Container(
           height: 200,
-          padding: const EdgeInsets.fromLTRB(12, 14, 12, 10),
+          padding: const EdgeInsets.fromLTRB(4, 14, 12, 8),
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(18),
@@ -247,19 +254,86 @@ class _HomeTabState extends State<HomeTab> {
               ),
             ],
           ),
-          child: hasAnyData
-              ? CustomPaint(
-                  painter: _CategoryLinePainter(
-                    data: data,
-                    categories: _chartCategories,
-                    lastIndex: lastIdx,
-                    weekly: _weeklyView,
-                  ),
-                  child: Container(),
-                )
-              : Center(
+          child: lines.isEmpty
+              ? Center(
                   child: Text('수집된 경고/위험이 아직 없어요.',
-                      style: TextStyle(color: Colors.grey[400]))),
+                      style: TextStyle(color: Colors.grey[400])))
+              : LineChart(LineChartData(
+                  minX: 0,
+                  maxX: (slots - 1).toDouble(),
+                  minY: 0,
+                  maxY: maxV.toDouble(),
+                  lineBarsData: lines,
+                  gridData: FlGridData(
+                    show: true,
+                    drawVerticalLine: false,
+                    horizontalInterval: interval,
+                    getDrawingHorizontalLine: (_) =>
+                        FlLine(color: Colors.grey.shade200, strokeWidth: 1),
+                  ),
+                  borderData: FlBorderData(show: false),
+                  titlesData: FlTitlesData(
+                    topTitles: const AxisTitles(
+                        sideTitles: SideTitles(showTitles: false)),
+                    rightTitles: const AxisTitles(
+                        sideTitles: SideTitles(showTitles: false)),
+                    leftTitles: AxisTitles(
+                      sideTitles: SideTitles(
+                        showTitles: true,
+                        reservedSize: 28,
+                        interval: interval,
+                        getTitlesWidget: (v, _) {
+                          if (v == 0) return const SizedBox.shrink();
+                          return Padding(
+                            padding: const EdgeInsets.only(right: 4),
+                            child: Text('${v.toInt()}',
+                                style: TextStyle(
+                                    fontSize: 9, color: Colors.grey[500])),
+                          );
+                        },
+                      ),
+                    ),
+                    bottomTitles: AxisTitles(
+                      sideTitles: SideTitles(
+                        showTitles: true,
+                        reservedSize: 20,
+                        getTitlesWidget: (v, _) {
+                          final i = v.toInt();
+                          if (_weeklyView) {
+                            if (i < 0 || i >= 7) return const SizedBox.shrink();
+                            return Padding(
+                              padding: const EdgeInsets.only(top: 4),
+                              child: Text(
+                                weekLabels[i],
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  color: i == lastIdx ? kGreen : Colors.grey[500],
+                                  fontWeight: i == lastIdx
+                                      ? FontWeight.bold
+                                      : FontWeight.normal,
+                                ),
+                              ),
+                            );
+                          } else {
+                            // 시간별: 00, 06, 12, 18, 23만 표시
+                            if (![0, 6, 12, 18, 23].contains(i)) {
+                              return const SizedBox.shrink();
+                            }
+                            return Padding(
+                              padding: const EdgeInsets.only(top: 4),
+                              child: Text(
+                                i.toString().padLeft(2, '0'),
+                                style: TextStyle(
+                                    fontSize: 9, color: Colors.grey[500]),
+                              ),
+                            );
+                          }
+                        },
+                      ),
+                    ),
+                  ),
+                  lineTouchData: const LineTouchData(enabled: false),
+                )),
         ),
         const SizedBox(height: 10),
         _legend(),
@@ -344,133 +418,3 @@ Color _categoryColor(AppCategory c) => switch (c) {
       AppCategory.other => const Color(0xFF757575),
     };
 
-class _CategoryLinePainter extends CustomPainter {
-  final Map<AppCategory, List<int>> data;
-  final List<AppCategory> categories;
-  final int lastIndex; // 이 인덱스까지만 선을 그림
-  final bool weekly;
-
-  _CategoryLinePainter({
-    required this.data,
-    required this.categories,
-    required this.lastIndex,
-    required this.weekly,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    const leftPad = 28.0;
-    const rightPad = 8.0;
-    const topPad = 8.0;
-    const bottomPad = 22.0;
-    final plotW = size.width - leftPad - rightPad;
-    final plotH = size.height - topPad - bottomPad;
-    final slots = weekly ? 7 : 24;
-    final maxIdx = lastIndex.clamp(0, slots - 1);
-
-    int maxVal = 0;
-    for (final c in categories) {
-      final list = data[c];
-      if (list == null) continue;
-      for (int i = 0; i <= maxIdx; i++) {
-        if (list[i] > maxVal) maxVal = list[i];
-      }
-    }
-    if (maxVal < 4) maxVal = 4; // 최소 눈금
-
-    final tp = TextPainter(textDirection: TextDirection.ltr);
-
-    // y 보조선 + 라벨 (0, max/2, max)
-    final yLineP = Paint()
-      ..color = Colors.grey.shade200
-      ..strokeWidth = 1;
-    for (final yv in [0, maxVal ~/ 2, maxVal]) {
-      final y = topPad + plotH * (1 - yv / maxVal);
-      canvas.drawLine(Offset(leftPad, y), Offset(size.width - rightPad, y), yLineP);
-      tp.text = TextSpan(
-        text: '$yv',
-        style: TextStyle(fontSize: 9, color: Colors.grey[500]),
-      );
-      tp.layout();
-      tp.paint(canvas, Offset(leftPad - tp.width - 4, y - tp.height / 2));
-    }
-
-    double xOf(int i) {
-      if (slots == 1) return leftPad + plotW / 2;
-      return leftPad + plotW * (i / (slots - 1));
-    }
-
-    double yOf(int v) => topPad + plotH * (1 - v / maxVal);
-
-    // x 라벨
-    if (weekly) {
-      const labels = ['월', '화', '수', '목', '금', '토', '일'];
-      for (int i = 0; i < 7; i++) {
-        tp.text = TextSpan(
-          text: labels[i],
-          style: TextStyle(
-            fontSize: 10,
-            color: i == maxIdx ? kGreen : Colors.grey[500],
-            fontWeight: i == maxIdx ? FontWeight.bold : FontWeight.normal,
-          ),
-        );
-        tp.layout();
-        tp.paint(canvas, Offset(xOf(i) - tp.width / 2, size.height - bottomPad + 4));
-      }
-    } else {
-      for (final h in [0, 6, 12, 18, 23]) {
-        tp.text = TextSpan(
-          text: h.toString().padLeft(2, '0'),
-          style: TextStyle(fontSize: 9, color: Colors.grey[500]),
-        );
-        tp.layout();
-        tp.paint(canvas, Offset(xOf(h) - tp.width / 2, size.height - bottomPad + 4));
-      }
-    }
-
-    // 카테고리별 선
-    for (final c in categories) {
-      final list = data[c];
-      if (list == null) continue;
-      final color = _categoryColor(c);
-      final path = Path();
-      bool started = false;
-      for (int i = 0; i <= maxIdx; i++) {
-        final v = list[i];
-        final x = xOf(i);
-        final y = yOf(v);
-        if (!started) {
-          path.moveTo(x, y);
-          started = true;
-        } else {
-          path.lineTo(x, y);
-        }
-      }
-      canvas.drawPath(
-        path,
-        Paint()
-          ..color = color
-          ..strokeWidth = 2
-          ..style = PaintingStyle.stroke
-          ..strokeCap = StrokeCap.round
-          ..strokeJoin = StrokeJoin.round,
-      );
-      // 점
-      for (int i = 0; i <= maxIdx; i++) {
-        final v = list[i];
-        if (v == 0) continue;
-        canvas.drawCircle(
-          Offset(xOf(i), yOf(v)),
-          2.5,
-          Paint()..color = color,
-        );
-      }
-    }
-  }
-
-  @override
-  bool shouldRepaint(_CategoryLinePainter old) =>
-      old.weekly != weekly ||
-      old.lastIndex != lastIndex ||
-      old.data != data;
-}

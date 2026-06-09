@@ -1,3 +1,5 @@
+import 'dart:math' show log, pow;
+
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import '../constants.dart';
@@ -319,7 +321,7 @@ class _ReportTabState extends State<ReportTab> {
             style: TextStyle(color: Colors.grey[400])),
       );
     }
-    final maxY = (maxMinutes * 1.15).ceilToDouble();
+    final (:maxY, :interval) = _niceScale(maxMinutes);
 
     return LayoutBuilder(builder: (context, constraints) {
       final w = constraints.maxWidth;
@@ -349,7 +351,7 @@ class _ReportTabState extends State<ReportTab> {
             gridData: FlGridData(
               show: true,
               drawVerticalLine: false,
-              horizontalInterval: maxY / 4,
+              horizontalInterval: interval,
               getDrawingHorizontalLine: (_) =>
                   FlLine(color: Colors.grey.shade200, strokeWidth: 1),
             ),
@@ -361,7 +363,7 @@ class _ReportTabState extends State<ReportTab> {
                 sideTitles: SideTitles(
                   showTitles: true,
                   reservedSize: leftAxis,
-                  interval: maxY / 4,
+                  interval: interval,
                   getTitlesWidget: (v, _) => Padding(
                     padding: const EdgeInsets.only(right: 4),
                     child: Text('${v.toInt()}m',
@@ -481,62 +483,67 @@ class _ReportTabState extends State<ReportTab> {
   }
 
   Widget _monthLineChart() {
-    final data = UsageTrackerService.instance.dailyByCategoryThisMonth();
-    // 데이터 있는 카테고리만 라인 생성
+    final data = UsageTrackerService.instance.dailyByCategoryThisCalendarMonth();
+    final daysInMonth = data.daysInMonth;
+    final todayIdx = data.todayIndex;
+    final now = DateTime.now();
+
+    double maxV = 4;
     final lines = <LineChartBarData>[];
-    int maxV = 0;
     for (final c in _chartCategories) {
       final list = data.warnings[c]!;
-      // 데이터 있는 날들의 (x, y) 만 모음 → 라인 끊김
       final spots = <FlSpot>[];
-      for (int i = 0; i <= data.lastIndex; i++) {
-        if (!data.dayHasData[i]) {
-          // 끊김: 현재 spot 누적 끊기 위해 라인을 분리하려면 separate line 필요.
-          // 여기선 다음 데이터-있는 날까지 건너뛰며 누적.
-          continue;
-        }
-        final v = list[i];
+      // 실제 데이터가 있는 날만 점을 찍어, 빈 날에 0으로 떨어지지 않고
+      // 데이터 포인트 사이를 부드럽게 보간하게 한다.
+      for (int i = 0; i <= todayIdx; i++) {
+        if (!data.dayHasData[i]) continue;
+        final v = list[i].toDouble();
         if (v > maxV) maxV = v;
-        spots.add(FlSpot(i.toDouble(), v.toDouble()));
+        spots.add(FlSpot(i.toDouble(), v));
       }
       if (spots.isEmpty) continue;
+      final color = _categoryColor(c);
       lines.add(LineChartBarData(
         spots: spots,
-        isCurved: false,
-        color: _categoryColor(c),
-        barWidth: 2,
+        isCurved: true,
+        curveSmoothness: 0.3,
+        preventCurveOverShooting: true,
+        color: color,
+        barWidth: 2.2,
         isStrokeCapRound: true,
         dotData: FlDotData(
           show: true,
           getDotPainter: (s, _, _, _) => FlDotCirclePainter(
-            radius: 2,
-            color: _categoryColor(c),
-            strokeWidth: 0,
+            radius: 2.8,
+            color: color,
+            strokeWidth: 1.2,
+            strokeColor: Colors.white,
           ),
+        ),
+        belowBarData: BarAreaData(
+          show: true,
+          color: color.withValues(alpha: 0.05),
         ),
       ));
     }
-    if (lines.isEmpty) {
-      return Center(
-        child: Text('최근 30일 데이터가 없어요.',
-            style: TextStyle(color: Colors.grey[400])),
-      );
-    }
-    if (maxV < 4) maxV = 4;
+
+    final (:maxY, :interval) = _niceScale(maxV);
 
     return Column(children: [
       Expanded(
         child: LineChart(
           LineChartData(
-            minX: 0, maxX: 29,
-            minY: 0, maxY: maxV.toDouble(),
+            minX: 0,
+            maxX: (daysInMonth - 1).toDouble(),
+            minY: 0,
+            maxY: maxY,
             lineBarsData: lines,
             gridData: FlGridData(
               show: true,
               drawVerticalLine: false,
-              horizontalInterval: (maxV / 4).clamp(1, double.infinity).toDouble(),
+              horizontalInterval: interval,
               getDrawingHorizontalLine: (_) =>
-                  FlLine(color: Colors.grey.shade200, strokeWidth: 1),
+                  FlLine(color: Colors.grey.shade100, strokeWidth: 1),
             ),
             borderData: FlBorderData(show: false),
             titlesData: FlTitlesData(
@@ -546,27 +553,32 @@ class _ReportTabState extends State<ReportTab> {
                 sideTitles: SideTitles(
                   showTitles: true,
                   reservedSize: 28,
-                  interval: (maxV / 4).clamp(1, double.infinity).toDouble(),
-                  getTitlesWidget: (v, _) => Padding(
-                    padding: const EdgeInsets.only(right: 4),
-                    child: Text('${v.toInt()}',
-                        style: TextStyle(fontSize: 9, color: Colors.grey[500])),
-                  ),
+                  interval: interval,
+                  getTitlesWidget: (v, _) {
+                    if (v == 0) return const SizedBox.shrink();
+                    return Padding(
+                      padding: const EdgeInsets.only(right: 4),
+                      child: Text('${v.toInt()}',
+                          style: TextStyle(fontSize: 9, color: Colors.grey[400])),
+                    );
+                  },
                 ),
               ),
               bottomTitles: AxisTitles(
                 sideTitles: SideTitles(
                   showTitles: true,
-                  reservedSize: 22,
-                  interval: 7,
+                  reservedSize: 20,
                   getTitlesWidget: (v, _) {
-                    final i = v.toInt();
-                    if (i < 0 || i > 29) return const SizedBox.shrink();
-                    final d = DateTime.now().subtract(Duration(days: 29 - i));
+                    final day = v.toInt() + 1;
+                    final show = day == 1 || day == 8 || day == 15 ||
+                        day == 22 || day == daysInMonth;
+                    if (!show) return const SizedBox.shrink();
                     return Padding(
                       padding: const EdgeInsets.only(top: 4),
-                      child: Text('${d.month}/${d.day}',
-                          style: TextStyle(fontSize: 9, color: Colors.grey[500])),
+                      child: Text(
+                        day == 1 ? '${now.month}/$day' : '$day',
+                        style: TextStyle(fontSize: 9, color: Colors.grey[500]),
+                      ),
                     );
                   },
                 ),
@@ -576,17 +588,18 @@ class _ReportTabState extends State<ReportTab> {
           ),
         ),
       ),
-      const SizedBox(height: 4),
-      Wrap(spacing: 10, runSpacing: 4, children: [
+      const SizedBox(height: 6),
+      Wrap(spacing: 12, runSpacing: 4, children: [
         for (final c in _chartCategories)
           Row(mainAxisSize: MainAxisSize.min, children: [
             Container(
-              width: 8, height: 8,
+              width: 18, height: 3,
               decoration: BoxDecoration(
-                color: _categoryColor(c), shape: BoxShape.circle,
+                color: _categoryColor(c),
+                borderRadius: BorderRadius.circular(2),
               ),
             ),
-            const SizedBox(width: 4),
+            const SizedBox(width: 5),
             Text('${_categoryEmoji(c)} ${_categoryLabel(c)}',
                 style: TextStyle(fontSize: 10, color: Colors.grey[700])),
           ]),
@@ -792,4 +805,23 @@ Color _categoryColor(AppCategory c) => switch (c) {
       AppCategory.study => const Color(0xFF00897B),
       AppCategory.other => const Color(0xFF757575),
     };
+
+/// 데이터 최댓값을 받아 "보기 좋은" maxY와 interval을 계산한다.
+/// 1·2·5 계열 nice-numbers 알고리즘 사용.
+({double maxY, double interval}) _niceScale(double dataMax) {
+  if (dataMax <= 0) return (maxY: 5.0, interval: 1.0);
+  final bumped = dataMax * 1.01 + 0.5;
+  final exp = (log(bumped) / log(10)).floor();
+  final mag = pow(10, exp).toDouble();
+  final frac = bumped / mag;
+  final niceMax =
+      frac <= 1 ? mag : frac <= 2 ? 2 * mag : frac <= 5 ? 5 * mag : 10 * mag;
+  final rawInt = niceMax / 4;
+  final iExp = (log(rawInt) / log(10)).floor();
+  final iMag = pow(10, iExp).toDouble();
+  final iFrac = rawInt / iMag;
+  final niceInt =
+      iFrac < 1.5 ? iMag : iFrac < 3.5 ? 2 * iMag : iFrac < 7.5 ? 5 * iMag : 10 * iMag;
+  return (maxY: niceMax, interval: niceInt.clamp(1.0, double.infinity));
+}
 
